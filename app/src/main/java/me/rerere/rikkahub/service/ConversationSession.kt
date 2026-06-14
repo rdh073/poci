@@ -161,7 +161,10 @@ class ConversationSession(
      */
     fun tryClaimIdleGenerationSlot(jobFactory: () -> Job): Boolean {
         val current = _generationJob.value
-        if (current?.isActive == true) return false
+        // Occupied if a job is registered AND not yet completed — this includes a job another claim
+        // just registered but has not started yet (a LAZY job is NOT isActive until started, so an
+        // isActive-only guard would let a second claim CAS over it and double-start the drain).
+        if (current != null && !current.isCompleted) return false
         val job = jobFactory()
         if (!_generationJob.compareAndSet(current, job)) {
             job.cancel()

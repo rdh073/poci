@@ -63,8 +63,15 @@ data class MessageDayCount(val day: String, val count: Int)
 // marker lives in a Text part's metadata, serialized inside the message JSON (j.value), so a substring
 // match on the compact `"<key>":"<value>"` pair excludes them without a schema column. User-typed text
 // containing the literal is JSON-escaped (\" not ") inside j.value, so it cannot false-match.
+// Escape LIKE metacharacters in the interpolated marker so the predicate matches LITERALLY: the value
+// `agent_event` contains `_`, a LIKE single-char wildcard, which would otherwise also exclude e.g.
+// `agentXevent`. The surrounding `%` stay as real wildcards; ESCAPE '\' makes `\_` / `\%` literal.
+private fun likeEscapeLiteral(s: String): String =
+    s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 private val EXCLUDE_SYNTHETIC_SQL =
-    "j.value NOT LIKE '%\"" + SYNTHETIC_KIND_METADATA_KEY + "\":\"" + AGENT_EVENT_SYNTHETIC_KIND + "\"%'"
+    "j.value NOT LIKE '%\"" + likeEscapeLiteral(SYNTHETIC_KIND_METADATA_KEY) + "\":\"" +
+        likeEscapeLiteral(AGENT_EVENT_SYNTHETIC_KIND) + "\"%' ESCAPE '\\'"
 
 // SQLite json_each() 展开 messages JSON 数组，json_extract() 提取 Token 字段并聚合
 private val TOKEN_STATS_SQL = SimpleSQLiteQuery(

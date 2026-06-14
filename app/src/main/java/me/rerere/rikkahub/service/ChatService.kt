@@ -1005,6 +1005,11 @@ class ChatService(
         session.tryClaimIdleGenerationSlot {
             appScope.launch(start = CoroutineStart.LAZY) {
                 try {
+                    // Hydrate the session from the persisted conversation BEFORE the drain appends: at
+                    // cold-start replay (or an enqueue for a never-opened conversation) the session is a
+                    // blank placeholder, and appending to it would overwrite the persisted message nodes
+                    // on save (data loss). Idempotent — a live, already-hydrated session is left as-is.
+                    hydrateSessionFromStoreIfBlank(conversationId)
                     drainAgentEventsAtTurnEnd(conversationId)
                     _generationDoneFlow.emit(conversationId)
                 } catch (e: CancellationException) {
@@ -1014,6 +1019,21 @@ class ChatService(
                     addError(e, conversationId, title = context.getString(R.string.error_title_generation))
                 }
             }
+        }
+    }
+
+    /**
+     * Load the persisted conversation into a BLANK session before an agent-event drain appends to it.
+     * Without this, a cold-start replay (or an enqueue for a conversation the UI never opened) drains a
+     * placeholder session whose save would wipe the persisted message nodes (review finding: data
+     * loss). Only a blank session is hydrated — a live, already-loaded conversation is never clobbered.
+     */
+    private suspend fun hydrateSessionFromStoreIfBlank(conversationId: Uuid) {
+        val session = getOrCreateSession(conversationId)
+        if (session.state.value.messageNodes.isNotEmpty()) return
+        val persisted = conversationRepo.getConversationById(conversationId) ?: return
+        if (persisted.messageNodes.isNotEmpty()) {
+            session.state.value = persisted
         }
     }
 
