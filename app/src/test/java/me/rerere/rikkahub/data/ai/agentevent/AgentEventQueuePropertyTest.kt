@@ -196,6 +196,17 @@ class AgentEventQueuePropertyTest {
                 withReplays.deliveryLog.size,
             )
             assertEquals("each delivered exactly once", eventCount, withReplays.deliveryLog.toSet().size)
+
+            // METAMORPHIC ORDER: the delivery ORDER (by stable enqueue_seq) is identical with or
+            // without the replay interleaving — not merely the count/set. Event ids are random per
+            // model, so compare the enqueue_seq sequence each delivery maps back to.
+            val baselineSeqs = baselineLog.map { id -> runBlocking { baseline.dao.getById(id)!!.enqueueSeq } }
+            val replaySeqs = withReplays.deliveryLog.map { id -> runBlocking { withReplays.dao.getById(id)!!.enqueueSeq } }
+            assertEquals(
+                "delivery order (by enqueue_seq) is unchanged by replay interleaving",
+                baselineSeqs,
+                replaySeqs,
+            )
         }
     }
 
@@ -275,5 +286,48 @@ class AgentEventQueuePropertyTest {
         assertEquals(AgentEventStatus.CONSUMED.name, row.status)
         assertEquals("node-$id", row.syntheticNodeId)
         assertEquals("msg-$id", row.syntheticMessageId)
+    }
+
+    // --- 8. RECOVERY RUNNER actively replays on restart (not observe-only) ---------------------
+    // The cold-start [AgentEventRecoveryRunner] must DRIVE the drain for every conversation holding
+    // pending events through the same claim path (driving delivery, not just scanning), and a second
+    // startup pass must deliver nothing new — AT_MOST_ONCE across restarts. Fails-before when the
+    // runner was observe-only (it returned a count but delivered nothing).
+    @Test
+    fun `recovery runner replays pending conversations exactly once`(): Unit = runBlocking {
+        val dao = FakeAgentEventDAO()
+        val transactions = FakeTransactions()
+        var clock = 1L
+        val store = RoomAgentEventStore(dao = dao, transactions = transactions, now = { clock++ })
+
+        // Two conversations each hold one pending event, persisted before a simulated process death.
+        val convA = Uuid.random()
+        val convB = Uuid.random()
+        store.enqueue(convA, "shell", "{}", "a-1")
+        store.enqueue(convB, "shell", "{}", "b-1")
+
+        val delivered = mutableListOf<String>()
+        // The drain callback mirrors ChatService.maybeDrainAgentEventsWhenIdle (idle here, claim one).
+        val runner = AgentEventRecoveryRunner(
+            store = store,
+            drainIfIdle = { id ->
+                runBlocking {
+                    val outcome = store.claimAndAppendAndConsume(id) { e ->
+                        SyntheticAppendResult("node-${e.id}", "msg-${e.id}")
+                    }
+                    if (outcome is ClaimOutcome.Delivered) delivered += outcome.event.id
+                }
+            },
+        )
+
+        val firstPass = runner.runStartupReplay()
+        assertEquals("both pending conversations replayed", 2, firstPass)
+        assertEquals("each delivered exactly once on the first replay", 2, delivered.size)
+        assertEquals("no duplicate deliveries", delivered.size, delivered.toSet().size)
+
+        // A second cold-start pass finds the rows already CONSUMED -> drains nothing new.
+        val secondPass = runner.runStartupReplay()
+        assertEquals("no conversations still pending after replay", 0, secondPass)
+        assertEquals("second replay delivers nothing new", 2, delivered.size)
     }
 }

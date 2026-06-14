@@ -8,6 +8,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ProcessLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -119,8 +120,12 @@ import me.rerere.rikkahub.data.datastore.getAssistantById
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
 import me.rerere.rikkahub.data.files.FilesManager
+import me.rerere.rikkahub.data.model.AGENT_EVENT_ID_METADATA_KEY
+import me.rerere.rikkahub.data.model.AGENT_EVENT_KIND_METADATA_KEY
+import me.rerere.rikkahub.data.model.AGENT_EVENT_SYNTHETIC_KIND
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.SYNTHETIC_KIND_METADATA_KEY
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.AutomationGrant
 import me.rerere.rikkahub.data.model.replaceRegexes
@@ -968,20 +973,46 @@ class ChatService(
         // Off the caller's thread; the store + drain are suspend. A reference keeps the session alive
         // across the async hop. Failures are surfaced as conversation errors, never swallowed.
         launchWithConversationReference(conversationId) {
-            runCatching {
+            val persisted = runCatching {
                 agentEventStore.enqueue(
                     conversationId = conversationId,
                     kind = kind,
                     payloadJson = payloadJson,
                     dedupeKey = dedupeKey,
                 )
-                if (AgentEventQueueReducer.canDrain(turnGateState(conversationId))) {
-                    drainAgentEventsAtTurnEnd(conversationId)
-                }
             }.onFailure { e ->
                 if (e is CancellationException) throw e
                 Log.e(TAG, "enqueueAgentEvent failed", e)
                 addError(e, conversationId, title = context.getString(R.string.error_title_generation))
+            }.isSuccess
+            if (persisted) maybeDrainAgentEventsWhenIdle(conversationId)
+        }
+    }
+
+    /**
+     * Deliver a freshly-enqueued event immediately IFF the conversation is idle, as a generation that
+     * is TRACKED in the session. The drain claims the session generation slot
+     * ([ConversationSession.tryClaimIdleGenerationSlot]) so it is visible to idle-gating
+     * ([ConversationSession.isGenerating]) and to stop/cancel: a concurrent enqueue then observes
+     * isGenerating and leaves its event buffered, so no second drain runs concurrently
+     * (NO_DOUBLE_GENERATION). The claim is idle-guarded and race-safe — it NEVER cancels a live
+     * generation, so a background event can never supersede a user turn; when not idle the event
+     * stays buffered (PENDING) for the next genuine turn-end drain.
+     */
+    fun maybeDrainAgentEventsWhenIdle(conversationId: Uuid) {
+        if (!AgentEventQueueReducer.canDrain(turnGateState(conversationId))) return
+        val session = getOrCreateSession(conversationId)
+        session.tryClaimIdleGenerationSlot {
+            appScope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    drainAgentEventsAtTurnEnd(conversationId)
+                    _generationDoneFlow.emit(conversationId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.e(TAG, "agent-event idle drain failed", e)
+                    addError(e, conversationId, title = context.getString(R.string.error_title_generation))
+                }
             }
         }
     }
@@ -2258,25 +2289,6 @@ class ChatService(
         finishInterruptedPendingTools(conversationId)
     }
 
-    companion object {
-        /**
-         * SYNTHETIC_DISTINCTNESS marker (issue #290): the part-metadata key that distinguishes a
-         * drained agent-event message from a normal user turn. The follow-on FTS-skip /
-         * token-stats-skip / same-role-sanitizer filters (NON-GOALS of this slice) will key off
-         * this; it is added now so those filters have a stable hook. `UIMessage` has no
-         * message-level metadata, so the smallest compatible marker lives on the `Text` part.
-         */
-        const val SYNTHETIC_KIND_METADATA_KEY = "rikkahubSyntheticKind"
-
-        /** The [SYNTHETIC_KIND_METADATA_KEY] value identifying an agent-event synthetic message. */
-        const val AGENT_EVENT_SYNTHETIC_KIND = "agent_event"
-
-        /** Part-metadata key carrying the originating agent-event id (for traceability). */
-        const val AGENT_EVENT_ID_METADATA_KEY = "agentEventId"
-
-        /** Part-metadata key carrying the originating agent-event kind. */
-        const val AGENT_EVENT_KIND_METADATA_KEY = "agentEventKind"
-    }
 }
 
 /**

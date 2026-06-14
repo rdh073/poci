@@ -315,10 +315,19 @@ val dataSourceModule = module {
             transactions = RoomBoardTransactionRunner(get<AppDatabase>()),
         )
     }
-    // Cold-start replay scan for the agent-event queue (issue #290): OBSERVE-ONLY at startup —
-    // PENDING events stay in Room and are drained by the same claim path at the next idle turn-end
-    // (preserving NO_DOUBLE_GENERATION; see the runner's KDoc).
-    single { AgentEventRecoveryRunner(store = get()) }
+    // Cold-start replay for the agent-event queue (issue #290): PENDING events survive in Room and at
+    // startup are drained through the SAME idle-gated claim path the live turn-end uses. ChatService
+    // is resolved LAZILY inside the drain lambda (not at construction) to avoid a startup init-order /
+    // circular dependency; the drain is idle-gated (preserving NO_DOUBLE_GENERATION) and the single
+    // store-claim keeps replay AT_MOST_ONCE.
+    single {
+        AgentEventRecoveryRunner(
+            store = get(),
+            drainIfIdle = { conversationId ->
+                get<me.rerere.rikkahub.service.ChatService>().maybeDrainAgentEventsWhenIdle(conversationId)
+            },
+        )
+    }
 
     // Cold-start recovery + retention composition root (SPEC.md M6, Success Criterion #4). Invoked
     // once from RikkaHubApp.onCreate: marks active task rows Interrupted (no replay) and sweeps

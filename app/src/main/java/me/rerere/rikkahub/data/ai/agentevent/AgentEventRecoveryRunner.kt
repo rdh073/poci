@@ -1,33 +1,31 @@
 package me.rerere.rikkahub.data.ai.agentevent
 
 import android.util.Log
+import kotlin.uuid.Uuid
 
 /**
  * The cold-start replay pass for the agent-event queue (issue #290), composed beside the existing
- * task startup-recovery runner. On a cold start it scans the store for conversations that still
- * hold PENDING events left by a process kill and logs the backlog.
+ * task startup-recovery runner and invoked once from RikkaHubApp.onCreate.
  *
- * What it deliberately does NOT do, and why (the chosen path the proposal asked to document):
- * delivering an event requires a live model continuation, which only `ChatService` can drive
- * against a live session — at cold start there is no such session, and forcing one would either
- * cancel/race a future user turn or start generation the user never asked for, breaking
- * NO_DOUBLE_GENERATION. So replay here is OBSERVE-ONLY: PENDING rows survive in Room (they live in
- * the store, not in memory — SURVIVES_RESTART) and are drained by the same
- * `claimAndAppendAndConsume` path the live turn-end drain uses, the next time that conversation
- * reaches an idle turn-end. The "central race rule" still holds: whichever drain (live turn-end or
- * a future explicit replay) reaches the row first wins the single transactional claim; the other is
- * a no-op. This keeps the v1 posture AT_MOST_ONCE and honest (mirroring [TaskRecoveryRunner]).
+ * Pending events survive a process kill in Room (SURVIVES_RESTART). On a cold start this scans the
+ * store for conversations that still hold PENDING events and asks ChatService to drain each through
+ * the SAME idle-gated `claimAndAppendAndConsume` path the live turn-end drain uses — [drainIfIdle] is
+ * bound to `ChatService.maybeDrainAgentEventsWhenIdle` at the composition root. The "central race
+ * rule" holds: whichever drain (this replay or a live turn-end) reaches a row first wins the single
+ * transactional claim; the other is a no-op — so replay is AT_MOST_ONCE and never double-delivers.
+ * The drain is idle-gated, so a conversation that is somehow already generating is left to its own
+ * turn-end drain (NO_DOUBLE_GENERATION).
  *
  * Failures are swallowed and logged so a recovery hiccup can never block the UI from coming up,
- * exactly the existing startup-recovery posture.
+ * mirroring the existing startup-recovery posture.
  */
 class AgentEventRecoveryRunner(
     private val store: AgentEventStore,
+    private val drainIfIdle: (Uuid) -> Unit,
 ) {
     /**
-     * Run the cold-start replay scan once. Returns the number of conversations that still hold
-     * PENDING events (for logging/tests); does NOT itself deliver any event — see the class KDoc for
-     * why delivery is deferred to the next idle turn-end drain.
+     * Run the cold-start replay once: drain every conversation that still holds PENDING events
+     * through the idle-gated drain. Returns the number of conversations replayed (for logging/tests).
      */
     suspend fun runStartupReplay(): Int {
         val pendingConversations = runCatching { store.conversationsWithPending() }
@@ -36,9 +34,12 @@ class AgentEventRecoveryRunner(
         if (pendingConversations.isNotEmpty()) {
             Log.i(
                 TAG,
-                "agent-event replay: ${pendingConversations.size} conversation(s) hold pending " +
-                    "events; deferred to next idle turn-end drain",
+                "agent-event replay: draining ${pendingConversations.size} conversation(s) with pending events",
             )
+            pendingConversations.forEach { conversationId ->
+                runCatching { drainIfIdle(conversationId) }
+                    .onFailure { Log.e(TAG, "agent-event replay drain failed for $conversationId", it) }
+            }
         }
         return pendingConversations.size
     }
