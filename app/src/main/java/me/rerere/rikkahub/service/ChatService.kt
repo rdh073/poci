@@ -76,6 +76,11 @@ import me.rerere.ai.runtime.task.TaskApprovalDecision
 import me.rerere.ai.runtime.task.TaskApprovalRequest
 import me.rerere.ai.runtime.task.TaskToolPolicy
 import me.rerere.ai.runtime.contract.TurnMode
+import me.rerere.rikkahub.data.ai.agentevent.AgentEventQueueReducer
+import me.rerere.rikkahub.data.ai.agentevent.AgentEventStore
+import me.rerere.rikkahub.data.ai.agentevent.ClaimOutcome
+import me.rerere.rikkahub.data.ai.agentevent.SyntheticAppendResult
+import me.rerere.rikkahub.data.ai.agentevent.TurnGateState
 import me.rerere.rikkahub.data.ai.runtime.AppToolCatalog
 import me.rerere.rikkahub.data.ai.runtime.toAssistantConfig
 import me.rerere.rikkahub.data.ai.task.ExecutionHandleRegistry
@@ -581,6 +586,10 @@ class ChatService(
     // Task-run persistence seam (SPEC.md M2). The child-approval router records auto-deny
     // reasons and drives the WaitingApproval round-trip on the SAME rows TaskCoordinator owns.
     private val taskRunStore: TaskRunStore,
+    // Durable agent-event queue (issue #290): async injection of a synthetic message into a
+    // conversation at an idle turn-end. ChatService owns the drain seam; the store is persistence
+    // only.
+    private val agentEventStore: AgentEventStore,
     // On-device UI automation (#187 v1, read-only). Registry hands out the live, system-instantiated
     // AccessibilityRuntime as a pure backend; the kill-switch dispatches STOP to the active guard(s).
     private val automationRegistry: AutomationRuntimeRegistry,
@@ -886,7 +895,14 @@ class ChatService(
                 // continuation so they reflect the final transcript (review mustFix #2).
                 sequenceTurnEnd(
                     complete = { handleMessageComplete(conversationId, runTurnEndJobs = false) },
-                    continueAfterStopHook = { continueAfterStopHookIfRequested(conversationId, assistant) },
+                    continueAfterStopHook = {
+                        continueAfterStopHookIfRequested(conversationId, assistant)
+                        // Agent-event drain (issue #290): after the Stop-hook continuation, before
+                        // the turn-end jobs (the "continuation before jobs" rule). The drain is
+                        // idle-gated by its own pending-tool guard; a deferred background event is
+                        // delivered here at a genuine turn-end, never mid-turn.
+                        drainAgentEventsAtTurnEnd(conversationId)
+                    },
                     launchTurnEndJobs = { launchTurnEndJobs(conversationId) },
                 )
             }
@@ -925,6 +941,117 @@ class ChatService(
         // runTurnEndJobs = false: the sendMessage path owns the single turn-end job launch via
         // sequenceTurnEnd, after this continuation finished (review mustFix #2).
         handleMessageComplete(conversationId, runTurnEndJobs = false)
+    }
+
+    // ---- 异步代理事件队列 (issue #290) ----
+
+    /**
+     * Enqueue a durable agent-event for a conversation (issue #290). The event is persisted PENDING;
+     * the visible synthetic message is NOT appended here (design correction #1) — appending mid-turn
+     * would corrupt [continueAfterStopHookIfRequested]'s `lastOrNull()` branch, and deferring the
+     * append lets one store transaction encode AT_MOST_ONCE.
+     *
+     * Delivery is gated: a drain is kicked NOW only when policy allows ([AgentEventQueueReducer.canDrain]
+     * over the live [turnGateState] — no active generation AND no pending approval). Otherwise the
+     * event waits and is drained at the next turn-end seam (IDLE_GATING / NO_DOUBLE_GENERATION).
+     *
+     * It MUST NOT go through [sendMessage]/[launchGenerationEntry] — those cancel the previous
+     * generation (the central re-entrancy hazard); the idle-time drain calls [handleMessageComplete]
+     * directly, never the superseding launcher.
+     */
+    fun enqueueAgentEvent(
+        conversationId: Uuid,
+        kind: String,
+        payloadJson: String,
+        dedupeKey: String,
+    ) {
+        // Off the caller's thread; the store + drain are suspend. A reference keeps the session alive
+        // across the async hop. Failures are surfaced as conversation errors, never swallowed.
+        launchWithConversationReference(conversationId) {
+            runCatching {
+                agentEventStore.enqueue(
+                    conversationId = conversationId,
+                    kind = kind,
+                    payloadJson = payloadJson,
+                    dedupeKey = dedupeKey,
+                )
+                if (AgentEventQueueReducer.canDrain(turnGateState(conversationId))) {
+                    drainAgentEventsAtTurnEnd(conversationId)
+                }
+            }.onFailure { e ->
+                if (e is CancellationException) throw e
+                Log.e(TAG, "enqueueAgentEvent failed", e)
+                addError(e, conversationId, title = context.getString(R.string.error_title_generation))
+            }
+        }
+    }
+
+    /**
+     * The live turn-gate state for the agent-event drain policy ([AgentEventQueueReducer.canDrain]).
+     * GENERATING when a provider collection is in flight; else PAUSED_FOR_APPROVAL when a pending
+     * tool approval is outstanding (an approval pause has NO active job yet still owns a pending
+     * step — the IDLE_GATING first-break point); else IDLE.
+     */
+    private fun turnGateState(conversationId: Uuid): TurnGateState {
+        val session = getOrCreateSession(conversationId)
+        return when {
+            session.isGenerating -> TurnGateState.GENERATING
+            conversationHasPendingToolApproval(session.state.value) -> TurnGateState.PAUSED_FOR_APPROVAL
+            else -> TurnGateState.IDLE
+        }
+    }
+
+    /**
+     * Drain ONE pending agent-event at a turn-end seam (issue #290). Claims the oldest PENDING event,
+     * appends its visible synthetic [MessageRole.USER] message (carrying the SYNTHETIC_DISTINCTNESS
+     * part metadata so later FTS/stats/sanitizer filters have a stable hook), and marks it CONSUMED —
+     * all in ONE store transaction, so a second drain or a startup replay racing the same row is a
+     * no-op (AT_MOST_ONCE). Then continues the model via [handleMessageComplete] with
+     * `runTurnEndJobs = false` (NOT a superseding launcher).
+     *
+     * Guarded exactly like [continueAfterStopHookIfRequested]: if the last message holds a pending
+     * tool the turn is NOT over (the user owns the next step), so no drain — the deferred event waits
+     * for a genuine idle turn-end. One event per continuation (productDecision #5): the nested
+     * completion runs with `runTurnEndJobs = false`, so it does not recurse into another drain.
+     */
+    private suspend fun drainAgentEventsAtTurnEnd(conversationId: Uuid) {
+        val conversation = getConversationFlow(conversationId).value
+        val lastMessage = conversation.currentMessages.lastOrNull()
+        if (lastMessage?.parts?.any { it is UIMessagePart.Tool && it.isPending } == true) return
+
+        val outcome = agentEventStore.claimAndAppendAndConsume(conversationId) { event ->
+            val syntheticMessage = UIMessage(
+                role = MessageRole.USER,
+                parts = listOf(
+                    UIMessagePart.Text(
+                        text = event.payloadJson,
+                        metadata = buildJsonObject {
+                            put(SYNTHETIC_KIND_METADATA_KEY, AGENT_EVENT_SYNTHETIC_KIND)
+                            put(AGENT_EVENT_ID_METADATA_KEY, event.id)
+                            put(AGENT_EVENT_KIND_METADATA_KEY, event.kind)
+                        },
+                    )
+                ),
+            )
+            val node = syntheticMessage.toMessageNode()
+            saveConversation(
+                conversationId,
+                getConversationFlow(conversationId).value.let { current ->
+                    current.copy(messageNodes = current.messageNodes + node)
+                },
+            )
+            SyntheticAppendResult(
+                syntheticNodeId = node.id.toString(),
+                syntheticMessageId = syntheticMessage.id.toString(),
+            )
+        }
+
+        if (outcome is ClaimOutcome.Delivered) {
+            // Continue the model on the just-appended synthetic message. runTurnEndJobs = false: the
+            // continuation does not own the turn-end-job launch here, and — crucially — does not
+            // recurse into another drain (one event per continuation, productDecision #5).
+            handleMessageComplete(conversationId, runTurnEndJobs = false)
+        }
     }
 
     // 自动压缩历史的触发与执行（design #193 Stage 1：token 触发器 + 熔断器）。
@@ -1638,7 +1765,15 @@ class ChatService(
             // continuation (runTurnEndJobs = false + sequenceTurnEnd) — launching here would
             // build title/suggestions from the pre-continuation transcript and race the final
             // metadata. Other entry points (regenerate, approval-resume) end the turn here.
-            if (runTurnEndJobs) launchTurnEndJobs(conversationId)
+            if (runTurnEndJobs) {
+                // Agent-event drain (issue #290): the regenerate/approval-resume turn-end is here.
+                // Gated on a SUCCESSFUL turn (we are in onSuccess) and on runTurnEndJobs so the
+                // nested continuation (runTurnEndJobs = false) cannot recurse into another drain
+                // (one event per continuation, productDecision #5). Drain BEFORE the turn-end jobs
+                // so title/suggestions reflect the post-continuation transcript.
+                drainAgentEventsAtTurnEnd(conversationId)
+                launchTurnEndJobs(conversationId)
+            }
         }.isSuccess
     }
 
@@ -2121,6 +2256,26 @@ class ChatService(
         job.cancel()
         runCatching { job.join() }
         finishInterruptedPendingTools(conversationId)
+    }
+
+    companion object {
+        /**
+         * SYNTHETIC_DISTINCTNESS marker (issue #290): the part-metadata key that distinguishes a
+         * drained agent-event message from a normal user turn. The follow-on FTS-skip /
+         * token-stats-skip / same-role-sanitizer filters (NON-GOALS of this slice) will key off
+         * this; it is added now so those filters have a stable hook. `UIMessage` has no
+         * message-level metadata, so the smallest compatible marker lives on the `Text` part.
+         */
+        const val SYNTHETIC_KIND_METADATA_KEY = "rikkahubSyntheticKind"
+
+        /** The [SYNTHETIC_KIND_METADATA_KEY] value identifying an agent-event synthetic message. */
+        const val AGENT_EVENT_SYNTHETIC_KIND = "agent_event"
+
+        /** Part-metadata key carrying the originating agent-event id (for traceability). */
+        const val AGENT_EVENT_ID_METADATA_KEY = "agentEventId"
+
+        /** Part-metadata key carrying the originating agent-event kind. */
+        const val AGENT_EVENT_KIND_METADATA_KEY = "agentEventKind"
     }
 }
 
