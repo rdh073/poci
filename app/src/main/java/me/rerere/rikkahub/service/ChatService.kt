@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.datetime.toJavaLocalDateTime
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -154,6 +155,7 @@ import me.rerere.rikkahub.web.NotFoundException
 import me.rerere.common.text.applyPlaceholders
 import me.rerere.rikkahub.utils.shouldRethrowVmError
 import java.time.Instant
+import java.time.ZoneId
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.uuid.Uuid
@@ -2379,29 +2381,55 @@ internal fun publishStreamingMessages(state: MutableStateFlow<Conversation>, mes
 
 /**
  * Initialization writes a Room snapshot that may have been read before startup replay appended and
- * consumed a synthetic agent-event node. Keep those live synthetic nodes when installing the snapshot
- * so a CONSUMED event cannot be dropped from the model continuation.
+ * consumed a synthetic agent-event node, then continued the model. When the live state still has the
+ * snapshot as its persisted prefix plus a newer tail anchored by that synthetic node, keep the whole
+ * tail so a CONSUMED event cannot lose its synthetic node, assistant reply, or tool continuation. If
+ * the prefix differs, or the tail is not an agent-event replay tail, the snapshot is a real
+ * edit/branch/truncate and wins.
  */
 internal fun preserveConcurrentSyntheticAgentEventNodes(
     snapshot: Conversation,
     live: Conversation,
 ): Conversation {
     if (snapshot.id != live.id) return snapshot
+    if (!live.hasPersistedPrefix(snapshot)) return snapshot
 
     val snapshotNodeIds = snapshot.messageNodes.mapTo(mutableSetOf()) { it.id }
     val snapshotMessageIds = snapshot.messageNodes
         .flatMapTo(mutableSetOf()) { node -> node.messages.map { it.id } }
-    val missingSyntheticNodes = live.messageNodes.filter { node ->
-        node.isSelectedSyntheticAgentEvent() &&
-            node.id !in snapshotNodeIds &&
-            node.messages.none { it.id in snapshotMessageIds }
+    val liveTail = live.messageNodes.drop(snapshot.messageNodes.size)
+    if (liveTail.isEmpty()) return snapshot
+    val appendOnlyTail = liveTail.all { node ->
+        node.id !in snapshotNodeIds &&
+            node.messages.none { it.id in snapshotMessageIds } &&
+            node.selectedMessageCreatedAfter(snapshot.updateAt)
     }
 
-    return if (missingSyntheticNodes.isEmpty()) {
+    return if (!appendOnlyTail || !liveTail.first().isSelectedSyntheticAgentEvent()) {
         snapshot
     } else {
-        snapshot.copy(messageNodes = snapshot.messageNodes + missingSyntheticNodes)
+        snapshot.copy(messageNodes = snapshot.messageNodes + liveTail)
     }
+}
+
+private fun Conversation.hasPersistedPrefix(snapshot: Conversation): Boolean =
+    messageNodes.size >= snapshot.messageNodes.size &&
+        snapshot.messageNodes.indices.all { index ->
+            messageNodes[index].hasSamePersistedContent(snapshot.messageNodes[index])
+        }
+
+private fun MessageNode.hasSamePersistedContent(other: MessageNode): Boolean =
+    id == other.id &&
+        selectIndex == other.selectIndex &&
+        messages == other.messages
+
+private fun MessageNode.selectedMessageCreatedAfter(instant: Instant): Boolean {
+    val message = messages.getOrNull(selectIndex) ?: return false
+    return message.createdAt
+        .toJavaLocalDateTime()
+        .atZone(ZoneId.systemDefault())
+        .toInstant()
+        .isAfter(instant)
 }
 
 private fun MessageNode.isSelectedSyntheticAgentEvent(): Boolean =

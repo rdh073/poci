@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.service
 
+import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
@@ -15,13 +16,15 @@ import me.rerere.rikkahub.data.model.toMessageNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
+import java.time.Instant
 import kotlin.uuid.Uuid
 
 /**
  * Pure regression seam for issue #290's startup replay race. [ChatService.initializeConversation]
  * installs a persisted Room snapshot, while startup replay can concurrently append a synthetic
- * agent-event node and consume the durable row. The initialization write must preserve that live
- * synthetic node; otherwise the consumed event becomes zero-delivery to the model.
+ * agent-event node, consume the durable row, and continue the model. The initialization write must
+ * preserve that live append-only tail; otherwise the consumed event becomes zero-delivery, or loses
+ * its assistant/tool continuation after one delivery.
  */
 class ConversationInitializationAgentEventRaceTest {
 
@@ -43,6 +46,30 @@ class ConversationInitializationAgentEventRaceTest {
     }
 
     @Test
+    fun `initialization snapshot preserves concurrent replay assistant continuation`() {
+        val persisted = conversation(
+            message("hello", MessageRole.USER, createdAt = beforeSnapshot).toMessageNode(),
+            message("hi", MessageRole.ASSISTANT, createdAt = beforeSnapshot).toMessageNode(),
+        )
+        val synthetic = syntheticAgentEventNode("event-1", createdAt = afterSnapshot)
+        val assistantContinuation = message(
+            text = "handled event",
+            role = MessageRole.ASSISTANT,
+            createdAt = afterSnapshot,
+        ).toMessageNode()
+        val liveAfterReplay = persisted.copy(
+            messageNodes = persisted.messageNodes + synthetic + assistantContinuation,
+        )
+
+        val merged = preserveConcurrentSyntheticAgentEventNodes(
+            snapshot = persisted,
+            live = liveAfterReplay,
+        )
+
+        assertEquals(persisted.messageNodes + synthetic + assistantContinuation, merged.messageNodes)
+    }
+
+    @Test
     fun `synthetic node already present in snapshot is not duplicated`() {
         val synthetic = syntheticAgentEventNode("event-1")
         val persisted = conversation(
@@ -60,30 +87,62 @@ class ConversationInitializationAgentEventRaceTest {
     }
 
     @Test
-    fun `initialization merge does not carry unrelated live nodes`() {
+    fun `initialization merge does not resurrect non agent event live tail removed by snapshot`() {
         val persisted = conversation(message("hello", MessageRole.USER).toMessageNode())
-        val unrelatedUserNode = message("late user edit", MessageRole.USER).toMessageNode()
-        val live = persisted.copy(messageNodes = persisted.messageNodes + unrelatedUserNode)
+        val removedTail = message(
+            text = "old assistant tail",
+            role = MessageRole.ASSISTANT,
+            createdAt = afterSnapshot,
+        ).toMessageNode()
+        val liveBeforeDeletion = persisted.copy(messageNodes = persisted.messageNodes + removedTail)
 
-        val merged = preserveConcurrentSyntheticAgentEventNodes(snapshot = persisted, live = live)
+        val merged = preserveConcurrentSyntheticAgentEventNodes(snapshot = persisted, live = liveBeforeDeletion)
 
         assertSame(persisted, merged)
     }
+
+    @Test
+    fun `initialization merge does not preserve live tail after branch switch`() {
+        val liveUser = message("hello", MessageRole.USER, createdAt = beforeSnapshot).toMessageNode()
+        val liveAssistant = message("old branch", MessageRole.ASSISTANT, createdAt = beforeSnapshot).toMessageNode()
+        val snapshot = conversation(
+            liveUser,
+            message("new branch", MessageRole.ASSISTANT, createdAt = beforeSnapshot).toMessageNode(),
+        )
+        val live = snapshot.copy(
+            messageNodes = listOf(liveUser, liveAssistant, syntheticAgentEventNode("event-1")),
+        )
+
+        val merged = preserveConcurrentSyntheticAgentEventNodes(snapshot = snapshot, live = live)
+
+        assertSame(snapshot, merged)
+    }
+
+    private val beforeSnapshot = LocalDateTime(2025, 1, 1, 12, 0, 0)
+    private val afterSnapshot = LocalDateTime(2027, 1, 1, 12, 0, 0)
 
     private fun conversation(vararg nodes: MessageNode): Conversation =
         Conversation.ofId(
             id = Uuid.random(),
             assistantId = Uuid.random(),
             messages = nodes.toList(),
-        )
+        ).copy(updateAt = snapshotUpdatedAt)
 
-    private fun message(text: String, role: MessageRole): UIMessage =
+    private fun message(
+        text: String,
+        role: MessageRole,
+        createdAt: LocalDateTime = beforeSnapshot,
+    ): UIMessage =
         UIMessage(
             role = role,
             parts = listOf(UIMessagePart.Text(text)),
+            createdAt = createdAt,
         )
 
-    private fun syntheticAgentEventNode(eventId: String): MessageNode =
+    private fun syntheticAgentEventNode(
+        eventId: String,
+        createdAt: LocalDateTime = afterSnapshot,
+    ): MessageNode =
         UIMessage(
             role = MessageRole.USER,
             parts = listOf(
@@ -96,5 +155,10 @@ class ConversationInitializationAgentEventRaceTest {
                     },
                 )
             ),
+            createdAt = createdAt,
         ).toMessageNode()
+
+    private companion object {
+        val snapshotUpdatedAt: Instant = Instant.parse("2026-01-01T12:00:00Z")
+    }
 }
