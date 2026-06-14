@@ -125,9 +125,11 @@ import me.rerere.rikkahub.data.model.AGENT_EVENT_KIND_METADATA_KEY
 import me.rerere.rikkahub.data.model.AGENT_EVENT_SYNTHETIC_KIND
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
+import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.SYNTHETIC_KIND_METADATA_KEY
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.AutomationGrant
+import me.rerere.rikkahub.data.model.isSyntheticAgentEvent
 import me.rerere.rikkahub.data.model.replaceRegexes
 import me.rerere.rikkahub.data.model.sanitizeForUpload
 import me.rerere.rikkahub.data.model.toMessageNode
@@ -809,7 +811,7 @@ class ChatService(
         getOrCreateSession(conversationId) // 确保 session 存在
         val conversation = conversationRepo.getConversationById(conversationId)
         if (conversation != null) {
-            updateConversationWithFileCleanup(conversationId, conversation)
+            updateConversationFromInitialization(conversationId, conversation)
             settingsStore.updateAssistant(conversation.assistantId)
         } else {
             // 新建对话, 并添加预设消息
@@ -820,7 +822,7 @@ class ChatService(
                 assistantId = assistant.id,
                 newConversation = true
             ).updateCurrentMessages(assistant.presetMessages)
-            updateConversationWithFileCleanup(conversationId, newConversation)
+            updateConversationFromInitialization(conversationId, newConversation)
         }
     }
 
@@ -2096,6 +2098,16 @@ class ChatService(
         session.state.value = conversation
     }
 
+    private fun updateConversationFromInitialization(conversationId: Uuid, conversation: Conversation) {
+        if (conversation.id != conversationId) return
+        val session = getOrCreateSession(conversationId)
+        casUpdateState(
+            state = session.state,
+            update = { current -> preserveConcurrentSyntheticAgentEventNodes(conversation, current) },
+            onTransition = { old, new -> checkFilesDelete(newConversation = new, oldConversation = old) },
+        )
+    }
+
     // 把 UI 侧的 read-modify-write 折成单次 CAS，使其无法丢失一次并发的流式 publish 或另一处 UI 写入（#108 的第
     // 二个竞态读写口）。CAS 闭包必须无副作用——[update] 在三个调用点都是纯变换（.copy/返回新 Conversation），可在
     // 竞争下安全重跑。保留原 id-guard 语义：变换后 id 与会话不符则不换（早退不写、不清理文件），与旧
@@ -2364,6 +2376,36 @@ internal fun mapMcpTool(
 internal fun publishStreamingMessages(state: MutableStateFlow<Conversation>, messages: List<UIMessage>) {
     state.update { current -> current.updateCurrentMessages(messages) }
 }
+
+/**
+ * Initialization writes a Room snapshot that may have been read before startup replay appended and
+ * consumed a synthetic agent-event node. Keep those live synthetic nodes when installing the snapshot
+ * so a CONSUMED event cannot be dropped from the model continuation.
+ */
+internal fun preserveConcurrentSyntheticAgentEventNodes(
+    snapshot: Conversation,
+    live: Conversation,
+): Conversation {
+    if (snapshot.id != live.id) return snapshot
+
+    val snapshotNodeIds = snapshot.messageNodes.mapTo(mutableSetOf()) { it.id }
+    val snapshotMessageIds = snapshot.messageNodes
+        .flatMapTo(mutableSetOf()) { node -> node.messages.map { it.id } }
+    val missingSyntheticNodes = live.messageNodes.filter { node ->
+        node.isSelectedSyntheticAgentEvent() &&
+            node.id !in snapshotNodeIds &&
+            node.messages.none { it.id in snapshotMessageIds }
+    }
+
+    return if (missingSyntheticNodes.isEmpty()) {
+        snapshot
+    } else {
+        snapshot.copy(messageNodes = snapshot.messageNodes + missingSyntheticNodes)
+    }
+}
+
+private fun MessageNode.isSelectedSyntheticAgentEvent(): Boolean =
+    messages.getOrNull(selectIndex)?.isSyntheticAgentEvent() == true
 
 /**
  * Atomic state read-modify-write that PAIRS a destructive side effect with the exact transition it
