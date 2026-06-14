@@ -29,6 +29,8 @@ class WorkspaceSheetVM(
         onAutoSelectWorkspace: (String) -> Unit = {},
     ) = controller.activate(assistantWorkspaceId, onAutoSelectWorkspace)
 
+    fun deactivate() = controller.deactivate()
+
     fun syncAssistantWorkspaceId(assistantWorkspaceId: String?) {
         controller.syncAssistantWorkspaceId(assistantWorkspaceId)
     }
@@ -58,30 +60,46 @@ class WorkspaceSheetController(
     private val _state = MutableStateFlow(WorkspaceSheetState())
     val state = _state.asStateFlow()
 
-    private var activated = false
     private var listJob: Job? = null
     private var browseJob: Job? = null
     private var lastAssistantWorkspaceId: String? = null
     private var autoSelected = false
 
+    private val isActive: Boolean get() = listJob?.isActive == true
+
+    // Activation is REVERSIBLE and bound to the sheet's settled-Workspace lifecycle, not a one-way
+    // latch. The VM is ViewModelStore-scoped (it survives sheet dismissal), so a permanent
+    // workspacesFlow() collection would keep doing workspace IO after the sheet is closed or
+    // reopened on another tab — violating the zero-IO-until-settled invariant. deactivate() stops
+    // the collection; activate() (re)starts it when the Workspace tab is settled again.
     fun activate(
         assistantWorkspaceId: String?,
         onAutoSelectWorkspace: (String) -> Unit = {},
     ) {
         lastAssistantWorkspaceId = assistantWorkspaceId
-        if (activated) return
-        activated = true
+        if (isActive) return
         _state.update { it.copy(activated = true) }
+        val resumeSelection = _state.value.selectedWorkspaceId
         listJob = scope.launch {
             store.workspacesFlow().collect { rows ->
                 foldRows(rows, onAutoSelectWorkspace)
             }
         }
+        // Reopen path: foldRows won't reload when the selection is unchanged across a
+        // deactivate/activate cycle, so restore the browser to the persisted project dir here.
+        if (resumeSelection != null) loadStartPath(resumeSelection)
+    }
+
+    fun deactivate() {
+        if (!isActive) return
+        listJob?.cancel()
+        browseJob?.cancel()
+        _state.update { it.copy(activated = false, loading = false) }
     }
 
     fun syncAssistantWorkspaceId(assistantWorkspaceId: String?) {
         lastAssistantWorkspaceId = assistantWorkspaceId
-        if (!activated || assistantWorkspaceId == null) return
+        if (!isActive || assistantWorkspaceId == null) return
         if (_state.value.selectedWorkspaceId != assistantWorkspaceId &&
             _state.value.workspaces.any { it.id == assistantWorkspaceId }
         ) {
@@ -170,27 +188,36 @@ class WorkspaceSheetController(
             onAutoSelectWorkspace(autoSelection)
         }
 
-        _state.update {
-            it.copy(
-                workspaces = rows,
-                selectedWorkspaceId = selected,
-                entries = if (selected == null) emptyList() else it.entries,
-            )
-        }
-
+        val selectionChanged = selected != previous.selectedWorkspaceId
         val previousRow = previous.workspaces.firstOrNull { it.id == selected }
         val currentRow = rows.firstOrNull { it.id == selected }
-        if (selected == null) {
-            browseJob?.cancel()
-            _state.update {
-                it.copy(projectDir = "", path = "", entries = emptyList(), loading = false, error = null)
+        val workingDirChanged = selected != null && !selectionChanged &&
+            currentRow?.workingDir != previousRow?.workingDir
+
+        // ONE atomic transition for the synchronous part: a row/assistant-driven selection change
+        // must never publish the new selectedWorkspaceId alongside the previous workspace's
+        // entries/path/projectDir (the swap-clears invariant). The async reload follows.
+        _state.update {
+            when {
+                selected == null -> it.copy(
+                    workspaces = rows, selectedWorkspaceId = null,
+                    projectDir = "", path = "", entries = emptyList(), loading = false, error = null,
+                )
+                selectionChanged -> it.copy(
+                    workspaces = rows, selectedWorkspaceId = selected,
+                    projectDir = "", path = "", entries = emptyList(), loading = true, error = null,
+                )
+                workingDirChanged -> it.copy(
+                    workspaces = rows, selectedWorkspaceId = selected, loading = true, error = null,
+                )
+                else -> it.copy(workspaces = rows, selectedWorkspaceId = selected)
             }
-        } else if (selected != previous.selectedWorkspaceId) {
-            selectLocal(selected)
-            loadStartPath(selected)
-        } else if (currentRow?.workingDir != previousRow?.workingDir) {
-            _state.update { it.copy(loading = true, error = null) }
-            loadStartPath(selected)
+        }
+
+        when {
+            selected == null -> browseJob?.cancel()
+            selectionChanged -> loadStartPath(selected)
+            workingDirChanged -> loadStartPath(selected)
         }
     }
 

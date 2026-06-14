@@ -26,6 +26,7 @@ import androidx.compose.material3.SecondaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -127,11 +128,25 @@ fun ExtensionSelector(
         workspaceVm.syncAssistantWorkspaceId(assistant.workspaceId?.toString())
     }
 
+    // Drive the Workspace VM by the SETTLED page so workspace IO runs only while the Workspace tab
+    // is actually visible+settled: activate on settle, deactivate on any other tab. The VM is
+    // ViewModelStore-scoped and outlives the sheet, so a one-shot activation would keep collecting
+    // workspace rows after dismissal (see WorkspaceSheetVM.activate).
     LaunchedEffect(Unit) {
-        snapshotFlow { pagerState.settledPage }.awaitPage(WORKSPACE_PAGE_INDEX)
-        workspaceVm.activate(currentAssistant.workspaceId?.toString()) { id ->
-            currentOnUpdate(currentAssistant.copy(workspaceId = Uuid.parse(id)))
+        snapshotFlow { pagerState.settledPage }.collect { page ->
+            if (page == WORKSPACE_PAGE_INDEX) {
+                workspaceVm.activate(currentAssistant.workspaceId?.toString()) { id ->
+                    currentOnUpdate(currentAssistant.copy(workspaceId = Uuid.parse(id)))
+                }
+            } else {
+                workspaceVm.deactivate()
+            }
         }
+    }
+
+    // Sheet dismissal disposes this composition; stop workspace IO so nothing runs while closed.
+    DisposableEffect(Unit) {
+        onDispose { workspaceVm.deactivate() }
     }
 
     // Defer the skills disk IO until the user actually settles on the Skills tab. Loading is

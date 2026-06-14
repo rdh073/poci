@@ -213,6 +213,76 @@ class WorkspaceSheetVMPropertyTest {
         }
     }
 
+    @Test
+    fun `P-WS-LAZY deactivation stops workspace IO until re-activation`(): Unit = runBlocking {
+        val store = FakeWorkspaceSheetStore(listOf(row("w1", workingDir = "project")))
+        val controller = WorkspaceSheetController(store = store, scope = CoroutineScope(coroutineContext))
+        try {
+            controller.activate(assistantWorkspaceId = "w1")
+            yield()
+            yield()
+            val afterActivate = store.callCount
+            assertTrue(afterActivate > 0)
+
+            // The VM is ViewModelStore-scoped and outlives the sheet; leaving the Workspace tab /
+            // dismissing the sheet must STOP the workspacesFlow collection so a later row emission
+            // does no workspace IO while closed.
+            controller.deactivate()
+            store.emit(listOf(row("w1", name = "Renamed", workingDir = "elsewhere")))
+            yield()
+            yield()
+            assertEquals(afterActivate, store.callCount)
+
+            // Returning to the Workspace tab resumes IO.
+            controller.activate(assistantWorkspaceId = "w1")
+            yield()
+            yield()
+            assertTrue(store.callCount > afterActivate)
+        } finally {
+            controller.close()
+        }
+    }
+
+    // Row-driven (foldRows) selection flip path — distinct from the direct-dropdown selectWorkspace
+    // path covered by P-WORKSPACE-SWAP-CLEARS above. The flip resolves the selection from a workspace
+    // row emission rather than a tap. NOTE: this asserts the post-fold state is consistent; the
+    // intermediate two-emission render the fix removes is not reliably observable from a JVM unit
+    // collector (StateFlow conflates synchronous updates) — the fix collapses foldRows to ONE atomic
+    // emission so a cross-dispatcher Compose collector can never see the new id with the old files.
+    @Test
+    fun `WORKSPACE-SWAP-CLEARS a row-driven selection flip never keeps the previous workspace files`(): Unit =
+        runBlocking {
+            val store = FakeWorkspaceSheetStore(
+                listOf(row("w1", workingDir = "one")),
+                filesByWorkspace = mapOf(
+                    "w1" to listOf(entry("one/w1-file")),
+                    "w2" to listOf(entry("two/w2-file")),
+                ),
+            )
+            val controller = WorkspaceSheetController(store = store, scope = CoroutineScope(coroutineContext))
+            try {
+                controller.activate(assistantWorkspaceId = "w1")
+                yield()
+                yield()
+                assertEquals("w1", controller.state.value.selectedWorkspaceId)
+                assertTrue(controller.state.value.entries.any { it.path.contains("w1-file") })
+
+                // w2 absent: records the assistant preference without selecting (no atomic select).
+                controller.syncAssistantWorkspaceId("w2")
+                // A row emission drops w1 and adds w2, so foldRows resolves the selection to w2.
+                store.emit(listOf(row("w2", workingDir = "two")))
+                yield()
+                assertEquals("w2", controller.state.value.selectedWorkspaceId)
+                assertTrue(controller.state.value.entries.none { it.path.contains("w1-file") })
+                yield()
+                yield()
+                assertEquals("w2", controller.state.value.selectedWorkspaceId)
+                assertTrue(controller.state.value.entries.none { it.path.contains("w1-file") })
+            } finally {
+                controller.close()
+            }
+        }
+
     private fun arbWorkingDir(): Arb<String> = arbitrary {
         if (Arb.boolean().bind()) "" else Arb.list(Arb.element(segments), 1..4).bind().joinToString("/")
     }
