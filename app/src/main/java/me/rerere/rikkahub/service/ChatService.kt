@@ -295,6 +295,19 @@ internal fun finishInterruptedPendingToolsForNewSend(
     )
 }
 
+/**
+ * STOP_IS_DETACH_NOT_KILL (issue #291): whether an interrupted (not-yet-executed) tool part is a
+ * `workspace_shell` run that a user stop should BACKGROUND rather than finalize as cancelled. The
+ * coordinator already persisted the run DETACHED under NonCancellable and launched the detached
+ * awaiter; the completion arrives later as a synthetic #290 event. So the turn finalizer must leave
+ * this part pending instead of stamping `{status:cancelled}` over a run that is still alive. PURE so
+ * the predicate is JVM-testable without the service. A backgrounded run is necessarily NOT executed
+ * (the coordinator rethrew cancellation rather than returning inline output); an inline-exited or
+ * killed run already has output and never reaches the finalizer.
+ */
+internal fun shouldBackgroundShellOnStop(tool: UIMessagePart.Tool): Boolean =
+    !tool.isExecuted && tool.toolName == "workspace_shell"
+
 // 自动压缩保留的最近消息数：与手动压缩对话框（CompressContextDialog）的默认值一致。
 private const val AUTO_COMPACT_KEEP_RECENT_MESSAGES = 32
 
@@ -1542,7 +1555,7 @@ class ChatService(
                             addAll(createSearchTools(settings))
                         }
                         addAll(localTools.getTools(assistant.localTools))
-                        addAll(createWorkspaceTools(assistant.workspaceId?.toString(), workspaceRepository))
+                        addAll(createWorkspaceTools(assistant.workspaceId?.toString(), conversationId, workspaceRepository))
                         // ui_observe (#187 v1) + nav act verbs ui_scroll/ui_global (#198 slice 8) +
                         // ui_set_text (slice 9) + ui_tap (slice 10), all over the same core. Empty surface
                         // unless automation is enabled AND a guard was minted; each tool authorizes via the
@@ -1855,6 +1868,13 @@ class ChatService(
     }
 
     private fun cancelToolByUser(tool: UIMessagePart.Tool): UIMessagePart.Tool {
+        // STOP_IS_DETACH_NOT_KILL (issue #291): a user stop during a workspace_shell foreground wait
+        // BACKGROUNDS the run (the coordinator persisted DETACHED under NonCancellable and launched a
+        // detached awaiter on AppScope), it does NOT kill it. So a still-pending workspace_shell tool
+        // part at finalize time must NOT be stamped {status:cancelled} — its completion arrives later
+        // as a synthetic #290 event. Leave it unchanged; finishPendingTools then skips it. Every other
+        // interrupted tool is still finalized as cancelled.
+        if (shouldBackgroundShellOnStop(tool)) return tool
         return tool.copy(
             output = listOf(
                 UIMessagePart.Text(
