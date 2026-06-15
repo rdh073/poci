@@ -197,6 +197,61 @@ class ShellRunCoordinatorPropertyTest {
         appScope.coroutineContext[Job]!!.cancelAndJoin()
     }
 
+    // --- STOP_IS_DETACH_NOT_KILL: the PRE-AWAITER gap ---------------------------------------------
+    // The `stop during foreground wait` test above only cancels AFTER awaitCount > 0 — i.e. AFTER the
+    // appScope awaiter is already installed. It cannot reach the gap this test pins: the process is
+    // ALREADY LIVE (startHandle returned) but the appScope awaiter is NOT YET installed, because the
+    // only cancellable suspend between spawn and awaiter-install is store.markForegroundWaiting. If a
+    // Stop lands exactly on that suspend, unfixed code throws out of markForegroundWaiting BEFORE
+    // appScope.async runs: the live process gets NO awaiter (so no terminal row, no completion event —
+    // stranded), and the held Stop never reaches the foreground-wait detach catch. The fix wraps
+    // markForegroundWaiting + the awaiter creation in ONE withContext(NonCancellable), so the awaiter
+    // is guaranteed installed once the process is live; the Stop then surfaces at the foreground wait.
+    @Test
+    fun `stop during pre-awaiter foreground-waiting transition still installs the awaiter`(): Unit = runBlocking {
+        val dao = FakeShellRunDAO()
+        // A store decorator that suspends INSIDE markForegroundWaiting (the pre-awaiter cancellable
+        // suspend), so a Stop can be delivered exactly there before the appScope awaiter is created.
+        val entered = CompletableDeferred<Unit>()
+        val markGate = CompletableDeferred<Unit>()
+        val inner = store(dao)
+        val st = object : ShellRunStore by inner {
+            override suspend fun markForegroundWaiting(taskId: Uuid, pidMeta: String?) {
+                entered.complete(Unit)
+                markGate.await() // hold the foreground-waiting transition open across the Stop
+                inner.markForegroundWaiting(taskId, pidMeta)
+            }
+        }
+        val appScope = CoroutineScope(Job() + Dispatchers.Default)
+        val processGate = CompletableDeferred<Unit>() // process stays alive until released
+        val handle = FakeShellHandle(result = ok(0), gate = processGate)
+        val coord = coordinator(st, appScope, startHandle = { handle })
+        val taskId = Uuid.random()
+
+        // Run the coordinator in a child job; the process is started before markForegroundWaiting, so
+        // when we cancel below the Stop lands on the markForegroundWaiting suspend — the pre-awaiter gap.
+        val runJob = launch(Dispatchers.Default) {
+            coord.run(request(detachAfterSeconds = 100), taskId)
+        }
+        withTimeout(2_000) { entered.await() }
+        runJob.cancel()
+        // Release the held transition; under the fix it runs NonCancellable and the awaiter is created.
+        markGate.complete(Unit)
+        runJob.join()
+
+        // The appScope awaiter WAS installed despite the Stop landing on the markForegroundWaiting
+        // suspend — fails-before because unfixed code throws out before appScope.async runs (count 0).
+        withTimeout(2_000) { while (handle.awaitCount.get() == 0) delay(5) }
+        assertTrue("the detached awaiter is installed even when the Stop hits the pre-awaiter gap", handle.awaitCount.get() > 0)
+
+        // Let the live process exit; the installed awaiter terminalises the row instead of stranding it.
+        processGate.complete(Unit)
+        withTimeout(2_000) {
+            while (dao.getById(taskId.toString())?.status != ShellRunStatus.SUCCEEDED.name) delay(5)
+        }
+        appScope.coroutineContext[Job]!!.cancelAndJoin()
+    }
+
     // --- STOP_IS_DETACH: hard-timeout / size-cap DO kill -----------------------------------------
     // The coordinator does not invent a kill on stop, but the SEAM's hard-timeout / size-cap kills
     // still map to terminal KILLED_TIMEOUT / KILLED_SIZE when the awaiter observes them.
