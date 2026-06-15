@@ -4,6 +4,9 @@ import android.net.Uri
 import androidx.core.net.toUri
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.ToolApprovalState
@@ -14,6 +17,38 @@ import me.rerere.ai.util.InstantSerializer
 import me.rerere.rikkahub.data.datastore.DEFAULT_ASSISTANT_ID
 import java.time.Instant
 import kotlin.uuid.Uuid
+
+/**
+ * The synthetic tool_result a turn finalizer stamps over a genuinely-orphaned tool that did NOT
+ * complete (interrupted before it ran, never resumable, not awaiting approval). Shared so the two
+ * finalizers ([List.sanitizeForUpload]'s repairOrphanTools and ChatService.cancelToolByUser) emit a
+ * byte-identical string, keeping sanitizeForUpload idempotent.
+ */
+internal const val TOOL_CANCELLED_MARKER =
+    """{"status":"cancelled","error":"Tool execution did not complete."}"""
+
+/**
+ * The synthetic tool_result a turn finalizer stamps over a still-alive, auto-backgrounded
+ * `workspace_shell` run (STOP_IS_DETACH_NOT_KILL, issue #291). The run was NOT cancelled — the
+ * coordinator persisted it DETACHED and the real completion arrives later as a synthetic #290 event —
+ * so the HONEST non-terminal marker is the SAME byte-shape the shipped Detached path already emits
+ * (`{"status":"running"}`). Shared so repairOrphanTools and cancelToolByUser agree byte-for-byte; once
+ * stamped the part is executed, so whichever finalizer runs first wins and the other no-ops.
+ */
+internal const val SHELL_BACKGROUNDED_MARKER = """{"status":"running"}"""
+
+/**
+ * Whether a tool part is a `workspace_shell` run that explicitly opted into auto-background
+ * (`detachAfterSeconds > 0`). Shared pure predicate so the turn finalizers
+ * (ChatService.shouldBackgroundShellOnStop and repairOrphanTools) classify a backgroundable shell
+ * identically — a default-kill shell (detachAfterSeconds absent / 0) never gets the running marker.
+ */
+internal fun UIMessagePart.Tool.isBackgroundableShell(): Boolean {
+    if (toolName != "workspace_shell") return false
+    val secs = inputAsJson().jsonObject["detachAfterSeconds"]
+        ?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+    return secs > 0
+}
 
 @Serializable
 data class Conversation(
@@ -202,6 +237,17 @@ private fun MessageNode.sanitizeNode(): MessageNode? {
  * but does NOT flip approvalState — Denied is resumable and would change the
  * persisted resume semantics).
  *
+ * EXCEPTION — an auto-backgrounded `workspace_shell` (STOP_IS_DETACH_NOT_KILL,
+ * issue #291): such a run was NOT cancelled, it is still alive (the coordinator
+ * persisted it DETACHED and its completion arrives later as a synthetic #290
+ * event). Stamping {status:cancelled} over it would lie about a running process,
+ * so a backgroundable shell gets the HONEST [SHELL_BACKGROUNDED_MARKER]
+ * (`{"status":"running"}`, byte-identical to the shipped Detached path) instead.
+ * Either marker makes the part executed, so the two order-independent finalizers
+ * (this one under NonCancellable in onCompletion, and cancelToolByUser) converge:
+ * whichever runs first stamps the marker, the other sees isExecuted and no-ops —
+ * which is also why sanitizeForUpload stays idempotent.
+ *
  * A Pending tool is left untouched so the approval/resume UI path is unchanged.
  */
 private fun UIMessage.repairOrphanTools(): UIMessage {
@@ -211,13 +257,8 @@ private fun UIMessage.repairOrphanTools(): UIMessage {
             !part.approvalState.canResumeToolExecution() &&
             part.approvalState !is ToolApprovalState.Pending
         ) {
-            part.copy(
-                output = listOf(
-                    UIMessagePart.Text(
-                        """{"status":"cancelled","error":"Tool execution did not complete."}"""
-                    )
-                )
-            )
+            val marker = if (part.isBackgroundableShell()) SHELL_BACKGROUNDED_MARKER else TOOL_CANCELLED_MARKER
+            part.copy(output = listOf(UIMessagePart.Text(marker)))
         } else {
             part
         }
