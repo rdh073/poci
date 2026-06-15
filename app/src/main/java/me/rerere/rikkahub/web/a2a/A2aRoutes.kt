@@ -690,9 +690,9 @@ internal suspend fun streamA2aTaskEvents(
             )
         } ?: emptyFlow()
 
-            merge(artifactEvents, statusEvents).collect { event ->
-                when (event) {
-                    is A2aStreamEvent.TaskStatusUpdateEvent -> {
+        merge(artifactEvents, statusEvents).collect { event ->
+            when (event) {
+                is A2aStreamEvent.TaskStatusUpdateEvent -> {
                     if (event.final) {
                         val currentConversation = getCurrentConversation()
                         val currentTerminalText = currentTerminalArtifactText(taskEntry, currentConversation)
@@ -708,7 +708,7 @@ internal suspend fun streamA2aTaskEvents(
                             terminalArtifactEmitted = true
                         }
                     }
-                        sendSseEvent(writer, requestId, event)
+                    sendSseEvent(writer, requestId, event)
                     if (event.final) {
                         throw A2aStreamFinished()
                     }
