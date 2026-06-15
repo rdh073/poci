@@ -396,7 +396,10 @@ private fun createShellTailTool(
     needsApproval = needsApproval("workspace_shell_tail"),
     execute = {
         val params = it.jsonObject
-        val taskId = params.string("taskId") ?: error("taskId is required")
+        val rawTaskId = params.string("taskId") ?: error("taskId is required")
+        // Reject any taskId that is not a canonical UUID before it reaches the file path.
+        val taskId = runCatching { Uuid.parse(rawTaskId).toString() }
+            .getOrElse { error("invalid taskId: must be a UUID") }
         val maxBytes = params.string("maxBytes")?.toIntOrNull()?.coerceIn(1, MAX_SHELL_TAIL_BYTES)
             ?: SHELL_TAIL_MAX_BYTES
         val tail = workspaceRepository.tailShellRun(workspaceId, taskId, maxBytes)

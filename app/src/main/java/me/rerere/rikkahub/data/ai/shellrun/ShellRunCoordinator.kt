@@ -130,7 +130,16 @@ class ShellRunCoordinator(
             cwd = request.cwd.orEmpty(),
             outputPath = request.outputPath,
         )
-        val handle = startHandle(request)
+        val handle = try {
+            startHandle(request)
+        } catch (t: Throwable) {
+            // startHandle threw before the process started (blank command, bad cwd, etc.). The row
+            // is already persisted as STARTED; mark it terminal so recovery does not later report it
+            // as INTERRUPTED_PROCESS_DEATH (which would be a false completion for a process that
+            // never existed).
+            store.recordTerminal(taskId, ShellRunStatus.INTERRUPTED_PROCESS_DEATH, null, 0, null)
+            throw t
+        }
         store.markForegroundWaiting(taskId, handle.pidMeta)
 
         // The single await Deferred, owned by appScope. On exit it ALWAYS terminalises the run via the

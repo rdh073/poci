@@ -1,5 +1,6 @@
 package me.rerere.rikkahub.service
 
+import me.rerere.ai.ui.ToolApprovalState
 import me.rerere.ai.ui.UIMessagePart
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -9,39 +10,89 @@ import org.junit.Test
  * STOP_IS_DETACH_NOT_KILL finalizer guard (issue #291). A user stop during a `workspace_shell`
  * foreground wait BACKGROUNDS the run — the coordinator persisted DETACHED under NonCancellable and
  * launched a detached awaiter on AppScope, and the completion arrives later as a synthetic #290
- * event. So the turn finalizer ([ChatService.cancelToolByUser] -> [finishInterruptedPendingToolsForNewSend])
- * must NOT stamp `{status:cancelled}` over that still-pending shell tool part. The pure predicate
- * [shouldBackgroundShellOnStop] is the narrow seam the finalizer consults; pinning it pins "a
- * backgrounded shell is left alone while every other interrupted tool is still cancelled".
+ * event. So the turn finalizer ([ChatService.cancelToolByUser]) must NOT stamp `{status:cancelled}`
+ * over that still-pending shell tool part.
  *
- * FAIL-BEFORE: on the unfixed code the predicate does not exist and the finalizer cancelled EVERY
- * not-yet-executed tool, including a backgrounded workspace_shell — so the user would see a
- * `cancelled` result for a run that is still alive (and would then receive a contradictory
- * completion event). After the fix only a pending workspace_shell is spared.
+ * The predicate is TRUE only when ALL hold:
+ *   1. !isExecuted (no inline output yet — coordinator re-threw CancellationException)
+ *   2. !isPending  (already approved — a process was actually started)
+ *   3. toolName == "workspace_shell"
+ *   4. input.detachAfterSeconds > 0 (the call explicitly opted into background mode)
+ *
+ * Conditions 2 & 4 were absent in the initial implementation and are covered here.
  */
 class ShellBackgroundOnStopTest {
 
-    private fun tool(toolName: String, executed: Boolean) = UIMessagePart.Tool(
+    private fun tool(
+        toolName: String,
+        executed: Boolean,
+        approvalState: ToolApprovalState = ToolApprovalState.Auto,
+        input: String = "{}",
+    ) = UIMessagePart.Tool(
         toolCallId = "call_1",
         toolName = toolName,
-        input = "{}",
+        input = input,
         output = if (executed) listOf(UIMessagePart.Text("{}")) else emptyList(),
+        approvalState = approvalState,
     )
 
-    // A pending (not-yet-executed) workspace_shell is the backgrounded case: leave it alone.
+    // ── true cases ──────────────────────────────────────────────────────────────
+
     @Test
-    fun `pending workspace_shell is backgrounded on stop`() {
-        assertTrue(shouldBackgroundShellOnStop(tool("workspace_shell", executed = false)))
+    fun `not-executed workspace_shell with detachAfterSeconds is backgrounded on stop`() {
+        assertTrue(
+            shouldBackgroundShellOnStop(
+                tool("workspace_shell", executed = false, input = """{"command":"echo hi","detachAfterSeconds":30}""")
+            )
+        )
     }
 
-    // An already-executed workspace_shell (exited inline or killed -> it has output) is NOT pending,
-    // so the finalizer never touches it anyway; the predicate must say "do not special-case it".
+    // ── false cases ─────────────────────────────────────────────────────────────
+
     @Test
     fun `executed workspace_shell is not a background case`() {
-        assertFalse(shouldBackgroundShellOnStop(tool("workspace_shell", executed = true)))
+        assertFalse(
+            shouldBackgroundShellOnStop(
+                tool("workspace_shell", executed = true, input = """{"command":"echo hi","detachAfterSeconds":30}""")
+            )
+        )
     }
 
-    // Every OTHER interrupted tool is still finalized as cancelled — the guard is shell-only.
+    @Test
+    fun `approval-pending workspace_shell is NOT backgrounded — cancel normally`() {
+        // No process was ever started for an approval-pending call; leaving it pending would strand it.
+        assertFalse(
+            shouldBackgroundShellOnStop(
+                tool(
+                    "workspace_shell",
+                    executed = false,
+                    approvalState = ToolApprovalState.Pending,
+                    input = """{"command":"rm -rf /","detachAfterSeconds":60}""",
+                )
+            )
+        )
+    }
+
+    @Test
+    fun `workspace_shell without detachAfterSeconds is NOT backgrounded`() {
+        // Default-kill shells: the coordinator uses the blocking executeCommand path, so no completion
+        // event ever arrives. Leaving the tool part pending would strand it permanently.
+        assertFalse(
+            shouldBackgroundShellOnStop(
+                tool("workspace_shell", executed = false, input = """{"command":"echo hi"}""")
+            )
+        )
+    }
+
+    @Test
+    fun `workspace_shell with detachAfterSeconds 0 is NOT backgrounded`() {
+        assertFalse(
+            shouldBackgroundShellOnStop(
+                tool("workspace_shell", executed = false, input = """{"command":"echo hi","detachAfterSeconds":0}""")
+            )
+        )
+    }
+
     @Test
     fun `other interrupted tools are still cancelled`() {
         assertFalse(shouldBackgroundShellOnStop(tool("ui_set_text", executed = false)))

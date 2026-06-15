@@ -35,7 +35,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.toJavaLocalDateTime
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
@@ -305,8 +307,17 @@ internal fun finishInterruptedPendingToolsForNewSend(
  * (the coordinator rethrew cancellation rather than returning inline output); an inline-exited or
  * killed run already has output and never reaches the finalizer.
  */
-internal fun shouldBackgroundShellOnStop(tool: UIMessagePart.Tool): Boolean =
-    !tool.isExecuted && tool.toolName == "workspace_shell"
+internal fun shouldBackgroundShellOnStop(tool: UIMessagePart.Tool): Boolean {
+    if (tool.isExecuted) return false
+    if (tool.isPending) return false  // approval-pending → cancel normally; no process started yet
+    if (tool.toolName != "workspace_shell") return false
+    // Only detach if the call explicitly opted in (detachAfterSeconds > 0). Default-kill shells
+    // (detachAfterSeconds absent/null) are cancelled normally — no completion event ever arrives
+    // for them, so leaving them pending would strand the tool part forever.
+    val secs = tool.inputAsJson().jsonObject["detachAfterSeconds"]
+        ?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+    return secs != null && secs > 0
+}
 
 // 自动压缩保留的最近消息数：与手动压缩对话框（CompressContextDialog）的默认值一致。
 private const val AUTO_COMPACT_KEEP_RECENT_MESSAGES = 32

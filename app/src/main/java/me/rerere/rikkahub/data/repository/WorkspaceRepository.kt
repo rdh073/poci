@@ -360,9 +360,12 @@ class WorkspaceRepository(
      */
     suspend fun tailShellRun(id: String, taskId: String, maxBytes: Int): String =
         withContext(Dispatchers.IO) {
+            // Validate taskId is a canonical UUID string before interpolating into the file path.
+            // Without this a model-controlled taskId containing '..' or '/' could escape shellTasksDir.
+            val canonicalId = Uuid.parse(taskId).toString()
             // id is accepted for symmetry/future per-workspace scoping; the output path is keyed by
             // the random taskId, so it is already unambiguous.
-            val file = File(shellTasksDir, "$taskId.output")
+            val file = File(shellTasksDir, "$canonicalId.output")
             if (!file.exists()) return@withContext ""
             val length = file.length()
             if (length <= maxBytes) return@withContext file.readText()
