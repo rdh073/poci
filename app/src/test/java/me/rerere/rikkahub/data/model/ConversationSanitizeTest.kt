@@ -442,6 +442,22 @@ class ConversationSanitizeTest {
         assertFalse(tool("workspace_shell", "\"x\"").isBackgroundableShell())
         assertFalse(tool("workspace_shell", """{"detachAfterSeconds":{}}""").isBackgroundableShell())
         assertFalse(tool("workspace_shell", """{"detachAfterSeconds":[30]}""").isBackgroundableShell())
+        // LENIENT model JSON: the runtime executes tool args through a lenient parser (unquoted keys),
+        // so the sanitizer must classify the SAME input identically. A strict parse falls back to {} and
+        // would misclassify these genuinely-detached runs as non-backgroundable → {status:cancelled}
+        // stamped over a live process. These FAIL before the lenient-parse fix.
+        assertTrue(
+            "unquoted keys (lenient) must still read as backgroundable",
+            tool("workspace_shell", """{command:"sleep 999",detachAfterSeconds:30}""").isBackgroundableShell(),
+        )
+        assertTrue(
+            "detachAfterSeconds as a quoted numeric string must read as backgroundable",
+            tool("workspace_shell", """{"detachAfterSeconds":"30"}""").isBackgroundableShell(),
+        )
+        assertTrue(
+            "unquoted key with quoted numeric value must read as backgroundable",
+            tool("workspace_shell", """{detachAfterSeconds:"45"}""").isBackgroundableShell(),
+        )
     }
 
     @Test

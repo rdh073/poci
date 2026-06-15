@@ -45,13 +45,30 @@ internal const val SHELL_BACKGROUNDED_MARKER = """{"status":"running"}"""
  */
 internal fun UIMessagePart.Tool.isBackgroundableShell(): Boolean {
     if (toolName != "workspace_shell") return false
-    // inputAsJson() is MODEL-controlled: it only falls back to {} for INVALID JSON, so valid-but-non-
-    // object input ([], 1, "x") and a non-primitive detachAfterSeconds ({}, []) still reach here. The
-    // throwing .jsonObject/.jsonPrimitive accessors would crash repairOrphanTools (sanitizeForUpload),
-    // so use the safe as?-cast helpers — a malformed shell input simply reads as non-backgroundable.
-    val secs = inputAsJson().jsonObjectOrNull?.get("detachAfterSeconds")
+    // Parse with the SAME lenient JSON the runtime executed this tool through (ChatTurnRuntime's
+    // ToolArgsJson): models routinely emit relaxed JSON — most commonly UNQUOTED keys like
+    // {command:"sleep 999",detachAfterSeconds:30}. A strict parse here (inputAsJson()) would fall back
+    // to {} for that valid-but-relaxed input and misclassify a genuinely-detached run as
+    // non-backgroundable, stamping {status:cancelled} over a live process — the exact bug the running
+    // marker exists to prevent. Safe as?-cast helpers keep valid-but-non-object input ([], 1, "x") and
+    // a non-primitive detachAfterSeconds ({}, []) from crashing repairOrphanTools; any parse failure
+    // simply reads as non-backgroundable. contentOrNull.toIntOrNull accepts both a JSON number and a
+    // quoted numeric string, matching how the shell tool itself reads detachAfterSeconds.
+    val secs = runCatching { LenientToolInputJson.parseToJsonElement(input.ifBlank { "{}" }) }
+        .getOrNull()
+        ?.jsonObjectOrNull?.get("detachAfterSeconds")
         ?.jsonPrimitiveOrNull?.contentOrNull?.toIntOrNull() ?: 0
     return secs > 0
+}
+
+/**
+ * Lenient JSON for re-reading a persisted, model-controlled tool input in the turn finalizers, mirroring
+ * the runtime's ToolArgsJson (isLenient + ignoreUnknownKeys). Kept private to the data-model layer so the
+ * sanitizer does not depend on the :ai-runtime internal that executes the tool.
+ */
+private val LenientToolInputJson = kotlinx.serialization.json.Json {
+    isLenient = true
+    ignoreUnknownKeys = true
 }
 
 @Serializable
