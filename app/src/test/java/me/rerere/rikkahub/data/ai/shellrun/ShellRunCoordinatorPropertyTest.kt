@@ -199,14 +199,12 @@ class ShellRunCoordinatorPropertyTest {
 
     // --- STOP_IS_DETACH_NOT_KILL: the PRE-AWAITER gap ---------------------------------------------
     // The `stop during foreground wait` test above only cancels AFTER awaitCount > 0 — i.e. AFTER the
-    // appScope awaiter is already installed. It cannot reach the gap this test pins: the process is
-    // ALREADY LIVE (startHandle returned) but the appScope awaiter is NOT YET installed, because the
-    // only cancellable suspend between spawn and awaiter-install is store.markForegroundWaiting. If a
-    // Stop lands exactly on that suspend, unfixed code throws out of markForegroundWaiting BEFORE
-    // appScope.async runs: the live process gets NO awaiter (so no terminal row, no completion event —
-    // stranded), and the held Stop never reaches the foreground-wait detach catch. The fix wraps
-    // markForegroundWaiting + the awaiter creation in ONE withContext(NonCancellable), so the awaiter
-    // is guaranteed installed once the process is live; the Stop then surfaces at the foreground wait.
+    // appScope awaiter is already installed. This test pins the invariant that the awaiter is installed
+    // BEFORE the FOREGROUND_WAITING flip can fail: the process is ALREADY LIVE (startHandle returned)
+    // and a Stop lands exactly on store.markForegroundWaiting. The fix creates the appScope awaiter
+    // FIRST (a non-suspending, never-failing async) and only THEN flips FOREGROUND_WAITING, so the
+    // awaiter is guaranteed installed once the process is live; the Stop then surfaces at the foreground
+    // wait. Fails-before any ordering where the flip precedes the awaiter (a throw there strands).
     @Test
     fun `stop during pre-awaiter foreground-waiting transition still installs the awaiter`(): Unit = runBlocking {
         val dao = FakeShellRunDAO()
@@ -249,6 +247,57 @@ class ShellRunCoordinatorPropertyTest {
         withTimeout(2_000) {
             while (dao.getById(taskId.toString())?.status != ShellRunStatus.SUCCEEDED.name) delay(5)
         }
+        appScope.coroutineContext[Job]!!.cancelAndJoin()
+    }
+
+    // --- STOP_IS_DETACH_NOT_KILL: the FOREGROUND_WAITING flip can FAIL (non-cancellation) ----------
+    // The pre-awaiter gap is not only reachable by a user Stop. markForegroundWaiting is a suspending
+    // Room transaction; a NON-cancellation throw (SQLiteException, DB locked, disk full) can propagate
+    // out of it for a perfectly live process. If the FOREGROUND_WAITING flip ran BEFORE the awaiter was
+    // created, that throw would escape run() with the live process holding NO awaiter — never
+    // terminalised (stranded), no completion event — the exact invariant the fix closes, just triggered
+    // by a DB error rather than a Stop. The catch in run() only handles CancellationException, so a
+    // non-cancellation throw is NOT caught; it propagates honestly, but the awaiter (created FIRST) must
+    // already exist so the row still terminalises on process exit. Fails-before any ordering where the
+    // flip precedes the awaiter. (markTerminalIfRunning's CAS accepts a STARTED row and runningRows()
+    // includes STARTED, so the awaiter terminalises correctly even though the flip never landed.)
+    @Test
+    fun `non-cancellation failure of foreground-waiting flip still terminalises via the awaiter`(): Unit = runBlocking {
+        val dao = FakeShellRunDAO()
+        // A store decorator whose markForegroundWaiting throws a non-cancellation error (a DB failure),
+        // never reaching the real flip — so the row stays STARTED.
+        val inner = store(dao)
+        val st = object : ShellRunStore by inner {
+            override suspend fun markForegroundWaiting(taskId: Uuid, pidMeta: String?) {
+                throw IllegalStateException("simulated DB failure (locked / disk full)")
+            }
+        }
+        val appScope = CoroutineScope(Job() + Dispatchers.Default)
+        val processGate = CompletableDeferred<Unit>() // process stays alive until released
+        val handle = FakeShellHandle(result = ok(0), gate = processGate)
+        val coord = coordinator(st, appScope, startHandle = { handle })
+        val taskId = Uuid.random()
+
+        // run() must propagate the non-cancellation throw (it is NOT a swallowed error) — assert it.
+        var thrown: Throwable? = null
+        val runJob = launch(Dispatchers.Default) {
+            try {
+                coord.run(request(detachAfterSeconds = 100), taskId)
+            } catch (t: IllegalStateException) {
+                thrown = t
+            }
+        }
+        runJob.join()
+        assertNotNull("the non-cancellation DB failure propagates out of run()", thrown)
+
+        // The awaiter WAS installed before the failing flip — the live process is not stranded. Let it
+        // exit; the awaiter terminalises the STARTED row to SUCCEEDED via the CAS instead of leaking it.
+        withTimeout(2_000) { while (handle.awaitCount.get() == 0) delay(5) }
+        processGate.complete(Unit)
+        withTimeout(2_000) {
+            while (dao.getById(taskId.toString())?.status != ShellRunStatus.SUCCEEDED.name) delay(5)
+        }
+        assertEquals(ShellRunStatus.SUCCEEDED.name, dao.getById(taskId.toString())!!.status)
         appScope.coroutineContext[Job]!!.cancelAndJoin()
     }
 

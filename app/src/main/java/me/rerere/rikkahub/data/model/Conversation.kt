@@ -5,8 +5,6 @@ import androidx.core.net.toUri
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.ToolApprovalState
@@ -14,6 +12,8 @@ import me.rerere.ai.ui.UIMessagePart
 import me.rerere.ai.ui.canResumeToolExecution
 import me.rerere.ai.ui.finishReasoning
 import me.rerere.ai.util.InstantSerializer
+import me.rerere.common.http.jsonObjectOrNull
+import me.rerere.common.http.jsonPrimitiveOrNull
 import me.rerere.rikkahub.data.datastore.DEFAULT_ASSISTANT_ID
 import java.time.Instant
 import kotlin.uuid.Uuid
@@ -45,8 +45,12 @@ internal const val SHELL_BACKGROUNDED_MARKER = """{"status":"running"}"""
  */
 internal fun UIMessagePart.Tool.isBackgroundableShell(): Boolean {
     if (toolName != "workspace_shell") return false
-    val secs = inputAsJson().jsonObject["detachAfterSeconds"]
-        ?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+    // inputAsJson() is MODEL-controlled: it only falls back to {} for INVALID JSON, so valid-but-non-
+    // object input ([], 1, "x") and a non-primitive detachAfterSeconds ({}, []) still reach here. The
+    // throwing .jsonObject/.jsonPrimitive accessors would crash repairOrphanTools (sanitizeForUpload),
+    // so use the safe as?-cast helpers — a malformed shell input simply reads as non-backgroundable.
+    val secs = inputAsJson().jsonObjectOrNull?.get("detachAfterSeconds")
+        ?.jsonPrimitiveOrNull?.contentOrNull?.toIntOrNull() ?: 0
     return secs > 0
 }
 

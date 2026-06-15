@@ -140,14 +140,14 @@ class ShellRunCoordinator(
             store.recordTerminal(taskId, ShellRunStatus.INTERRUPTED_PROCESS_DEATH, null, 0, null)
             throw t
         }
-        // markForegroundWaiting is the ONLY cancellable suspend between the live process (startHandle
-        // returned) and the awaiter being installed on appScope. If a user Stop landed on that suspend,
-        // cancellation would throw out of run() BEFORE appScope.async ran: the live process would have
-        // NO awaiter — no terminal row would ever be written (stranded), no completion event would
-        // fire, and the held Stop would never reach the foreground-wait detach catch below. So the
-        // foreground-waiting flip AND the awaiter creation are ONE NonCancellable unit returning the
-        // Deferred: once the process is live the appScope awaiter is guaranteed installed, and the held
-        // Stop then surfaces at the foreground-wait suspension below (where the catch detaches it).
+        // INVARIANT: once the process is live (startHandle returned) an awaiter MUST be installed, so
+        // the run always reaches a terminal row + completion no matter how this turn ends. The awaiter
+        // is created FIRST — appScope.async is non-suspending and cannot fail at creation — so the
+        // invariant holds regardless of what markForegroundWaiting does. If the FOREGROUND_WAITING flip
+        // then throws (a user Stop's CancellationException, OR a non-cancellation Room failure such as
+        // a locked DB / disk-full), that throw propagates out of run() honestly, but the live process
+        // is NOT stranded: the awaiter terminalises it via the store's CAS, which accepts a STARTED row
+        // (and runningRows() includes STARTED), so the missed flip never breaks terminalisation.
         //
         // The single await Deferred, owned by appScope. On exit it ALWAYS terminalises the run via the
         // store's CAS, and the store reports — in the SAME transaction — whether the run had been
@@ -155,13 +155,18 @@ class ShellRunCoordinator(
         // atomic read is what kills the inline-vs-detach boundary race: the terminal write and the
         // "fire a completion?" decision are one transaction, so a process that exits exactly at the
         // detach budget can never both record an inline terminal AND return a Detached handle.
-        val awaitJob = withContext(NonCancellable) {
+        val awaitJob = appScope.async {
+            val result = awaitDispatcher.await(handle)
+            recordTerminalAndMaybeNotify(taskId, request, handle, result)
+            result
+        }
+        // markForegroundWaiting is the only cancellable suspend between the live process and the
+        // foreground wait below; the awaiter is already installed above, so a Stop (or DB error) here
+        // strands nothing. Run it NonCancellable so a user Stop does NOT abort the flip mid-write —
+        // the held Stop then surfaces at the foreground-wait suspension below (where the catch detaches
+        // it). A non-cancellation throw still propagates: the awaiter keeps the process honest.
+        withContext(NonCancellable) {
             store.markForegroundWaiting(taskId, handle.pidMeta)
-            appScope.async {
-                val result = awaitDispatcher.await(handle)
-                recordTerminalAndMaybeNotify(taskId, request, handle, result)
-                result
-            }
         }
 
         val detachBudgetMillis = request.detachAfterSeconds?.let { it.toLong() * 1_000L }

@@ -384,6 +384,28 @@ class ConversationSanitizeTest {
     }
 
     @Test
+    fun `adversarial shell input does not crash sanitizeForUpload`() {
+        // The orphaned workspace_shell's input is MODEL-controlled. Valid-but-non-object JSON ("[]")
+        // routed through repairOrphanTools (sanitizeForUpload) crashed at isBackgroundableShell's
+        // throwing .jsonObject — taking down the whole conversation's upload finalization instead of
+        // repairing the orphan. FAILS-BEFORE with IllegalArgumentException; after the fix the non-object
+        // input simply reads as non-backgroundable, so the orphan is stamped cancelled and balanced.
+        val nodes = listOf(
+            userNode("run it"),
+            shellTool("[]"),
+        )
+
+        val sanitized = nodes.sanitizeForUpload()
+        val shell = sanitized.flatMap { it.currentMessage.getTools() }.single()
+        assertTrue("the orphan is repaired, not crashed", shell.isExecuted)
+        assertEquals(
+            "non-object input is non-backgroundable, so the orphan is cancelled",
+            TOOL_CANCELLED_MARKER,
+            shellOutputText(sanitized),
+        )
+    }
+
+    @Test
     fun `non-detach shell orphan is still stamped cancelled`() {
         // A default-kill shell (no detachAfterSeconds) is NOT backgrounded: no completion event ever
         // arrives, so it must still be finalized as cancelled — not left as a phantom running run.
@@ -412,6 +434,14 @@ class ConversationSanitizeTest {
         assertFalse(tool("workspace_shell", """{"command":"echo hi"}""").isBackgroundableShell())
         assertFalse(tool("workspace_shell", "").isBackgroundableShell())
         assertFalse(tool("web_search", """{"detachAfterSeconds":30}""").isBackgroundableShell())
+        // ADVERSARIAL model-controlled input: valid-but-non-object JSON and a non-primitive
+        // detachAfterSeconds must read as non-backgroundable WITHOUT throwing. The throwing
+        // .jsonObject/.jsonPrimitive accessors would crash repairOrphanTools (sanitizeForUpload) here.
+        assertFalse(tool("workspace_shell", "[]").isBackgroundableShell())
+        assertFalse(tool("workspace_shell", "1").isBackgroundableShell())
+        assertFalse(tool("workspace_shell", "\"x\"").isBackgroundableShell())
+        assertFalse(tool("workspace_shell", """{"detachAfterSeconds":{}}""").isBackgroundableShell())
+        assertFalse(tool("workspace_shell", """{"detachAfterSeconds":[30]}""").isBackgroundableShell())
     }
 
     @Test
