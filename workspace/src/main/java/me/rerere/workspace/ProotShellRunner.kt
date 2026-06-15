@@ -20,7 +20,7 @@ class ProotShellRunner(
         // pre-resolved handle so the caller's await() yields the SAME WorkspaceCommandResult execute()
         // would have. Otherwise hand back a live process-owning handle.
         precheck(context)?.let { return PreResolvedShellRunHandle(it) }
-        return ProcessShellRunHandle(startProcess(context), context.timeoutMillis, outputFile, sizeCapBytes)
+        return ProcessShellRunHandle.start(startProcess(context), context.timeoutMillis, outputFile, sizeCapBytes)
     }
 
     /**

@@ -165,4 +165,44 @@ class WorkspaceShellRunnerDetachTest {
         assertEquals(ShellKillReason.KilledTimeout, handle.killReason)
         assertTrue("a killed run does not report exit 0", result.exitCode != 0)
     }
+
+    // TIMEOUT_BOUNDARY: the poll loop must never grant the process time past the deadline — a zero
+    // (already-expired) deadline is a timeout, exactly as readResult(0) reports it, NOT a free 50ms
+    // grace slice. Fails-before: awaitOnce always waited one full WATCHDOG_POLL_MILLIS slice before
+    // checking the deadline, so a small/zero timeout could return finished=true / timedOut=false.
+    @Test
+    fun `startShellRun honors a zero timeout as a timeout, not a grace slice`() {
+        assumeTrue("needs a host /bin/sh", hostShellAvailable())
+        val outputDir = Files.createTempDirectory("shellrun-out").toFile()
+        val runner = HostShellRunner()
+
+        val result = runner.startShellRun(
+            context("sleep 5", outputDir, timeoutMillis = 0),
+            File(outputDir, "boundary.output"),
+        ).await()
+
+        assertTrue("a zero deadline reports a timeout", result.timedOut)
+        assertEquals("a timed-out run reports exit -1, like readResult", -1, result.exitCode)
+    }
+
+    // CONSTRUCTION_SAFE: if the output sink cannot be opened, the already-started process must not leak
+    // and the failure must surface promptly (never hang). Fails-before: startShellRun built the handle
+    // without guarding the started process against a sink-open throw, leaking the live process.
+    @Test
+    fun `startShellRun surfaces a sink-open failure instead of leaking or hanging`() {
+        assumeTrue("needs a host /bin/sh", hostShellAvailable())
+        val outputDir = Files.createTempDirectory("shellrun-out").toFile()
+        // Make the output path unopenable: its parent is a regular FILE, so outputStream() throws.
+        val parentIsAFile = File(outputDir, "not-a-dir").apply { writeText("blocker") }
+        val unopenable = File(parentIsAFile, "nested.output")
+        val runner = HostShellRunner()
+
+        var threw = false
+        try {
+            runner.startShellRun(context("sleep 30", outputDir, timeoutMillis = 60_000), unopenable)
+        } catch (_: Exception) {
+            threw = true
+        }
+        assertTrue("the sink-open failure propagates instead of returning a half-built handle", threw)
+    }
 }

@@ -5,6 +5,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 interface WorkspaceShellRunner {
     fun execute(context: WorkspaceShellContext): WorkspaceCommandResult
@@ -97,7 +98,7 @@ class HostShellRunner : WorkspaceShellRunner {
         context: WorkspaceShellContext,
         outputFile: File,
         sizeCapBytes: Long,
-    ): ShellRunHandle = ProcessShellRunHandle(startProcess(context), context.timeoutMillis, outputFile, sizeCapBytes)
+    ): ShellRunHandle = ProcessShellRunHandle.start(startProcess(context), context.timeoutMillis, outputFile, sizeCapBytes)
 
     private fun startProcess(context: WorkspaceShellContext): Process =
         ProcessBuilder(defaultShell(), "-c", context.command)
@@ -153,7 +154,7 @@ fun Process.readResult(timeoutMillis: Long): WorkspaceCommandResult {
  * [ShellOutputFileSink] mirrors the raw bytes to the durable output file. The two read independent
  * stream copies via [TeeInputStream], so neither path's draining starves the other.
  */
-internal class ProcessShellRunHandle(
+internal class ProcessShellRunHandle private constructor(
     private val process: Process,
     private val timeoutMillis: Long,
     outputFile: File,
@@ -163,6 +164,11 @@ internal class ProcessShellRunHandle(
     private val fileSink: ShellOutputFileSink = ShellOutputFileSink(outputFile)
     private val stdoutCollector: StreamCollector
     private val stderrCollector: StreamCollector
+
+    // The output sink is owned by the two stream pumps that WRITE to it, not by await(): once both have
+    // drained to EOF the sink is closed, so a handle that is never await()ed still releases the file
+    // descriptor instead of leaking it. await() also closes it (idempotent) for the join-timeout case.
+    private val pumpsRemaining = AtomicInteger(2)
 
     @Volatile
     private var killReasonInternal: ShellKillReason? = null
@@ -179,10 +185,14 @@ internal class ProcessShellRunHandle(
         // is intentional, not error-hiding.
         runCatching { process.outputStream.close() }
         // Tee each stream: the char collector keeps the bounded in-memory buffer (byte-compat) while
-        // every byte it reads is also written to the file sink.
+        // every byte it reads is also written to the file sink. The last pump to finish closes the sink.
         fileSink.fileCapBytes = sizeCapBytes
-        stdoutCollector = StreamCollector(TeeInputStream(process.inputStream, fileSink))
-        stderrCollector = StreamCollector(TeeInputStream(process.errorStream, fileSink))
+        stdoutCollector = StreamCollector(TeeInputStream(process.inputStream, fileSink), onExit = ::onPumpExit)
+        stderrCollector = StreamCollector(TeeInputStream(process.errorStream, fileSink), onExit = ::onPumpExit)
+    }
+
+    private fun onPumpExit() {
+        if (pumpsRemaining.decrementAndGet() == 0) fileSink.close()
     }
 
     override val killReason: ShellKillReason?
@@ -218,19 +228,30 @@ internal class ProcessShellRunHandle(
 
     private fun awaitOnce(): WorkspaceCommandResult {
         try {
-            // Poll the process in slices so the size watchdog can fire between waits — mirrors the old
-            // single waitFor(timeout) deadline, but checks the output file cap each slice.
-            val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+            // Poll the process in slices so the size watchdog can fire between waits, but NEVER grant
+            // time past the deadline: the slice is capped to the time remaining, so a sub-poll timeout is
+            // honored to the millisecond — byte-compatible with readResult's single waitFor(timeout).
+            val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
             var finished = false
             while (true) {
-                if (process.waitFor(WATCHDOG_POLL_MILLIS, TimeUnit.MILLISECONDS)) {
+                val remainingNanos = deadlineNanos - System.nanoTime()
+                if (remainingNanos <= 0L) {
+                    // Deadline reached: mirror readResult returning the current termination status —
+                    // already-exited counts as finished, still-running falls to the timeout kill below.
+                    finished = !process.isAlive
+                    break
+                }
+                val sliceMs = minOf(
+                    WATCHDOG_POLL_MILLIS,
+                    TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1L),
+                )
+                if (process.waitFor(sliceMs, TimeUnit.MILLISECONDS)) {
                     finished = true
                     break
                 }
                 if (fileSink.byteCount > sizeCapBytes && killReasonInternal == null) {
                     kill(ShellKillReason.KilledSize)
                 }
-                if (System.nanoTime() >= deadline) break
             }
             if (!finished && process.isAlive) {
                 // Timeout (or size-cap kill mid-wait): force-kill, tagging a plain timeout when no
@@ -260,8 +281,25 @@ internal class ProcessShellRunHandle(
         }
     }
 
-    private companion object {
+    internal companion object {
         const val WATCHDOG_POLL_MILLIS = 50L
+
+        /**
+         * Build a handle that OWNS [process]. Opening the output sink can fail (e.g. an uncreatable
+         * output path); the process is already started, so destroy it before rethrowing — otherwise it
+         * would leak with no handle to kill it.
+         */
+        fun start(
+            process: Process,
+            timeoutMillis: Long,
+            outputFile: File,
+            sizeCapBytes: Long,
+        ): ProcessShellRunHandle = try {
+            ProcessShellRunHandle(process, timeoutMillis, outputFile, sizeCapBytes)
+        } catch (t: Throwable) {
+            process.destroyForcibly()
+            throw t
+        }
     }
 }
 
@@ -332,6 +370,11 @@ private class ShellOutputFileSink(private val file: File) {
 
     private var bytesWritten: Long = 0L
 
+    // Latched once a file write fails: the durable-tail mirror is best-effort and must never throw back
+    // into the pump, so after a failure it stops writing (byteCount keeps counting for the watchdog).
+    @Volatile
+    private var fileWriteFailed: Boolean = false
+
     init {
         file.parentFile?.mkdirs()
         out = file.outputStream().buffered()
@@ -340,11 +383,19 @@ private class ShellOutputFileSink(private val file: File) {
     fun write(buffer: ByteArray, length: Int) {
         synchronized(lock) {
             byteCount += length
+            if (fileWriteFailed) return
             val room = fileCapBytes - bytesWritten
             if (room > 0) {
                 val toWrite = minOf(length.toLong(), room).toInt()
-                out.write(buffer, 0, toWrite)
-                bytesWritten += toWrite
+                // Best-effort: a tail-file IO failure (e.g. disk full) must NOT propagate into the pump
+                // thread, or the pump dies, the child's pipe fills, and the COMMAND hangs to its timeout.
+                // Latch the failure and drop the mirror; the command keeps running and completing.
+                try {
+                    out.write(buffer, 0, toWrite)
+                    bytesWritten += toWrite
+                } catch (_: IOException) {
+                    fileWriteFailed = true
+                }
             }
         }
     }
@@ -371,6 +422,7 @@ private class ShellOutputFileSink(private val file: File) {
 private class StreamCollector(
     stream: InputStream,
     private val maxChars: Int = MAX_OUTPUT_CHARS,
+    private val onExit: () -> Unit = {},
 ) {
     private val builder = StringBuilder()
 
@@ -402,6 +454,10 @@ private class StreamCollector(
             // On a forced kill (timeout/cancel) the stream is closed and a blocked read throws
             // InterruptedIOException etc.; keep what was read. The exception must not escape, or the
             // thread's default handler crashes the app.
+        } finally {
+            // Signal the owner that this pump drained — the sink can close once both pumps finish, so an
+            // abandoned (never-await()ed) handle still releases the file descriptor.
+            onExit()
         }
     }.apply { start() }
 
