@@ -236,7 +236,10 @@ class ClaudeProvider(
         // leak-on-cancel). Once the first SSE event lands the gate disarms permanently — retrying
         // then would duplicate already-delivered (interleaved-thinking) content. See
         // StreamRetryPolicy / StreamRetryController.
-        val controller = StreamRetryController(STREAM_MAX_RETRIES) {
+        val controller = StreamRetryController(
+            maxRetries = STREAM_MAX_RETRIES,
+            replaySafety = StreamRetryController.ReplaySafety.NonIdempotent,
+        ) {
             StreamRetryController.Cancellable(factory.newEventSource(request, listener)::cancel)
         }
 
@@ -386,12 +389,13 @@ class ClaudeProvider(
                     return
                 }
 
-                var exception = t
+                val terminalOutcome = outcome as StreamRetryController.Outcome.Terminate
+                var exception = terminalOutcome.error
 
                 AiLog.failure(TAG, t, response?.code)
 
-                val bodyRaw = response?.body?.stringSafe()
                 try {
+                    val bodyRaw = response?.body?.stringSafe()
                     if (!bodyRaw.isNullOrBlank()) {
                         val bodyElement = Json.parseToJsonElement(bodyRaw)
                         exception = bodyElement.parseErrorDetail()
@@ -404,15 +408,13 @@ class ClaudeProvider(
             }
 
             override fun onClosed(eventSource: EventSource) {
-                // A clean EOF before the first frame is still a pre-first-frame death: retry it if
-                // budget remains, otherwise complete normally.
-                val outcome = controller.onClosed(
+                // A clean EOF before the first frame is still a pre-first-frame terminal:
+                // retry it if budget remains, otherwise propagate the terminal synthetic error.
+                when (val outcome = controller.onClosed(
                     backoffFor = { attempt -> jitteredBackoffMillis(attempt - 1, null) },
-                )
-                if (outcome is StreamRetryController.Outcome.Retry) {
-                    scheduleRetry(outcome.attempt, outcome.backoffMillis)
-                } else {
-                    close()
+                )) {
+                    is StreamRetryController.Outcome.Retry -> scheduleRetry(outcome.attempt, outcome.backoffMillis)
+                    is StreamRetryController.Outcome.Terminate -> close(outcome.error)
                 }
             }
         }
