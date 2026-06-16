@@ -68,6 +68,7 @@ internal fun <K : Any, V : Any> newMcpConcurrentMap(): MutableMap<K, V> = Concur
 private const val MAX_RECONNECT_ATTEMPTS = 5
 private const val BASE_RECONNECT_DELAY_MS = 1000L
 private const val MAX_RECONNECT_DELAY_MS = 30000L
+internal fun mcpAutoConnectCandidates(configs: List<McpServerConfig>) = configs.filter { it.commonOptions.enable }
 
 class McpManager(
     private val settingsStore: SettingsStore,
@@ -111,7 +112,7 @@ class McpManager(
                 .collect { mcpServerConfigs ->
                     runCatching {
                         Log.i(TAG, "update configs: $mcpServerConfigs")
-                        val newConfigs = mcpServerConfigs.filter { it.commonOptions.enable }
+                        val newConfigs = mcpAutoConnectCandidates(mcpServerConfigs)
                         val currentConfigs = clients.keys.toList()
                         val (toAdd, toRemove) = currentConfigs.checkDifferent(
                             other = newConfigs,
