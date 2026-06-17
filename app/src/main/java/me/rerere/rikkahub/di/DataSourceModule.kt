@@ -339,6 +339,7 @@ val dataSourceModule = module {
     single<ShellRunStore> {
         RoomShellRunStore(
             dao = get(),
+            agentEventDao = get(),
             transactions = RoomBoardTransactionRunner(get<AppDatabase>()),
         )
     }
