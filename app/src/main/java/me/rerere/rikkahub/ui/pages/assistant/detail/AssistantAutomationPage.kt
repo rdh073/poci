@@ -60,6 +60,7 @@ import me.rerere.rikkahub.data.model.AutomationSink
 import me.rerere.rikkahub.data.model.AutomationVerb
 import me.rerere.rikkahub.service.automation.AutomationRuntimeRegistry
 import me.rerere.rikkahub.ui.components.nav.BackButton
+import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.components.ui.CardGroup
 import me.rerere.rikkahub.ui.theme.CustomColors
 import org.koin.androidx.compose.koinViewModel
@@ -221,6 +222,7 @@ fun AssistantAutomationPage(id: String) {
     val assistant by vm.assistant.collectAsStateWithLifecycle()
     val registry: AutomationRuntimeRegistry = koinInject()
     val a11yEnabled = registry.backend() != null
+    val yoloAcknowledged = LocalSettings.current.displaySetting.automationYoloAcknowledged
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
 
     Scaffold(
@@ -240,8 +242,10 @@ fun AssistantAutomationPage(id: String) {
             grant = assistant.automationGrant,
             hooks = assistant.hooks,
             a11yEnabled = a11yEnabled,
+            yoloAcknowledged = yoloAcknowledged,
             onUpdate = { vm.update(assistant.copy(automationGrant = it)) },
             onUpdateHooks = { vm.update(assistant.copy(hooks = it)) },
+            onAcknowledgeYolo = { vm.setAutomationYoloAcknowledged(true) },
         )
     }
 }
@@ -252,8 +256,10 @@ private fun AutomationScopeContent(
     grant: AutomationGrant,
     hooks: HookConfig,
     a11yEnabled: Boolean,
+    yoloAcknowledged: Boolean,
     onUpdate: (AutomationGrant) -> Unit,
     onUpdateHooks: (HookConfig) -> Unit,
+    onAcknowledgeYolo: () -> Unit,
 ) {
     Column(
         modifier = modifier
@@ -291,6 +297,16 @@ private fun AutomationScopeContent(
         LeaseLimitsEditor(grant = grant, onUpdate = onUpdate)
 
         GuardrailEditor(hooks = hooks, onUpdate = onUpdateHooks)
+
+        // YOLO "bypass all restriction" danger zone. Flavor-gated: the sideload build renders the
+        // toggle + danger-consent dialog + warning banner; the Play build renders nothing (the
+        // unrestricted surface is sideload-only, mirroring the workspace shell security boundary).
+        AutomationYoloSection(
+            grant = grant,
+            yoloAcknowledged = yoloAcknowledged,
+            onUpdate = onUpdate,
+            onAcknowledge = onAcknowledgeYolo,
+        )
     }
 }
 
