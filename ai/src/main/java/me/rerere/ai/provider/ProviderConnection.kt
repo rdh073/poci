@@ -110,6 +110,13 @@ private fun ProbeOutcome?.statusOr(fallback: Int): Int =
  * A chat probe proves the server speaks the API when it returns a 2xx chat payload, or a 4xx
  * provider error (auth + endpoint are fine; only the probed model was invalid — the
  * 400-model-not-found case folds in here).
+ *
+ * Best-effort by design: a 4xx is taken as a provider error from any JSON error shape, so a generic
+ * gateway error (e.g. `{"message":"Not Found"}`) can read as ReachableNoModelList rather than
+ * UnreachableOrWrongEndpoint. Both verdicts steer the user to "add models manually", so the
+ * mislabel is low-harm; distinguishing them would need per-provider model-not-found error codes (a
+ * follow-up, not worth a heuristic that guesses wrong the other way). The probe only runs at all
+ * when /models failed AND a real model id exists.
  */
 private fun ProbeOutcome?.provesApiReachable(): Boolean {
     val http = this as? ProbeOutcome.Http ?: return false

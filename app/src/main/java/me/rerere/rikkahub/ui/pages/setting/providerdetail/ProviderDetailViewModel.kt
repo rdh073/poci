@@ -92,23 +92,38 @@ class ProviderDetailViewModel(
      * catalog (empty unless the list call succeeded).
      */
     private suspend fun probe(setting: ProviderSetting): Pair<ConnectionResult, List<Model>> {
-        val provider = providerManager.getProviderByType(setting)
-        val modelsProbe = provider.probeModelList(setting)
+        return try {
+            val provider = providerManager.getProviderByType(setting)
+            val modelsProbe = provider.probeModelList(setting)
 
-        val listProvedConnection = (modelsProbe.outcome as? ProbeOutcome.Http)
-            ?.body
-            ?.let { it is ProbeOutcome.Body.ModelList && it.count > 0 }
-            ?: false
+            // The list already proves the connection when it returned models OR a 429 (authed +
+            // reachable, just throttled — classifyProviderConnection makes 429 a terminal Valid). In
+            // both cases skip the chat probe: it would be redundant (models case) or also throttled
+            // and ignored (429 case).
+            val http = modelsProbe.outcome as? ProbeOutcome.Http
+            val listProvedConnection = http != null && (
+                http.status == 429 ||
+                    (http.body is ProbeOutcome.Body.ModelList && (http.body as ProbeOutcome.Body.ModelList).count > 0)
+                )
 
-        val chatProbe = if (!listProvedConnection) {
-            val modelId = setting.models.firstOrNull { it.type == ModelType.CHAT }?.modelId
-                ?: setting.models.firstOrNull()?.modelId
-            modelId?.let { provider.probeChat(setting, it) }
-        } else {
-            null
+            val chatProbe = if (!listProvedConnection) {
+                val modelId = setting.models.firstOrNull { it.type == ModelType.CHAT }?.modelId
+                    ?: setting.models.firstOrNull()?.modelId
+                modelId?.let { provider.probeChat(setting, it) }
+            } else {
+                null
+            }
+
+            val result = classifyProviderConnection(modelsProbe.outcome, chatProbe)
+            result to modelsProbe.models
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // A throwable here is NOT a network response the probe helpers classified — it escaped
+            // BEFORE the request was sent: a malformed Base URL (toHttpUrl), a Vertex service-account
+            // token failure, an empty key. Without this, refreshCatalog/testConnection would set
+            // Loading and never resolve. Treat it as a wrong-endpoint verdict so the UI shows WHY.
+            ConnectionResult.UnreachableOrWrongEndpoint to emptyList()
         }
-
-        val result = classifyProviderConnection(modelsProbe.outcome, chatProbe)
-        return result to modelsProbe.models
     }
 }

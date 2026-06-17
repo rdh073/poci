@@ -113,8 +113,11 @@ class OpenAIProvider(
             }
             put("max_tokens", JsonPrimitive(1))
         }
+        // Honor the configured chat-completions path (proxies often remap it). This probes the
+        // chat-completions endpoint even when generation uses the Responses API — it's a
+        // reachability/auth check, and OpenAI-compatible endpoints expose chat/completions.
         val request = Request.Builder()
-            .url("${providerSetting.baseUrl}/chat/completions")
+            .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
             .addHeader("Authorization", "Bearer $key")
             .addHeader("Content-Type", "application/json")
             .post(json.encodeToString(body).toRequestBody("application/json".toMediaType()))

@@ -58,7 +58,14 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
 internal fun selectModelFetchSetting(
     persisted: ProviderSetting,
     draft: ProviderSetting
-): ProviderSetting = if (draft::class == persisted::class) draft else persisted
+): ProviderSetting = if (draft::class == persisted::class) {
+    // draft config (just-typed apiKey/baseUrl/headers) + persisted models. The draft's own model
+    // snapshot is stale — model add/del/reorder persist into [persisted], not the id-keyed draft —
+    // so the chat probe must read models from [persisted], not from the draft. Same merge as Save.
+    mergeConfigKeepingModels(draft, persisted)
+} else {
+    persisted
+}
 
 @Composable
 internal fun ModelList(
@@ -188,6 +195,14 @@ internal fun ModelList(
             // manual-add), replacing the cramped bottom-sheet picker.
             Button(
                 onClick = {
+                    // The browser is a separate route that reads the PERSISTED provider. Commit the
+                    // in-progress Config-tab edits first (same merge as Save: draft config + the
+                    // persisted model list) so it fetches with the current key/baseUrl, not a stale
+                    // snapshot. Skip when a type change is pending — persisting the new type with the
+                    // old models would cross-contaminate (see selectModelFetchSetting).
+                    if (draft::class == providerSetting::class) {
+                        onUpdateProvider(mergeConfigKeepingModels(draft, providerSetting))
+                    }
                     navController.navigate(
                         Screen.SettingProviderModelBrowser(providerId = providerSetting.id.toString())
                     )

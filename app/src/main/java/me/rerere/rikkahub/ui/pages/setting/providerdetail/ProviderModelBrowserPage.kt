@@ -77,6 +77,11 @@ fun ProviderModelBrowserPage(
     val enabledIds = remember(provider.models) { provider.models.map { it.modelId }.toSet() }
     val filtered = remember(catalog, query) { filterModels(catalog, query).sortedBy { it.modelId } }
 
+    // Read-modify-write over the captured `settings` snapshot — the same mutation pattern the rest
+    // of the provider UI uses (onUpdateProvider everywhere). Two toggles fired within one state
+    // round-trip could in theory race; not worth a bespoke atomic path here when bulk enable/disable
+    // is a single write and single toggles re-read after each recomposition. An app-wide atomic
+    // settingsStore.update {} would be the real fix, out of scope for this screen.
     fun updateProvider(newProvider: ProviderSetting) {
         settingVM.updateSettings(
             settings.copy(providers = settings.providers.map { if (it.id == newProvider.id) newProvider else it })
