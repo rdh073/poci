@@ -111,11 +111,11 @@ class AutomationGrantPropertyTest {
                 cap!!
                 assertTrue(
                     "derived surface must not reach a package the user did not approve",
-                    cap.surface.all { it in grant.allowedPackages },
+                    (cap.surface as Surface.Scoped).packages.all { it in grant.allowedPackages },
                 )
                 assertEquals(
                     "a live grant's surface is exactly the approved packages",
-                    grant.allowedPackages,
+                    Surface.Scoped(grant.allowedPackages),
                     cap.surface,
                 )
             }

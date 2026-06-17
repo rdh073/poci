@@ -47,7 +47,7 @@ fun AutomationGrant.toCapability(sessionId: String, now: Long): Capability? {
     if (maxSteps <= 0) return null
     return Capability.root(
         sessionId = sessionId,
-        surface = allowedPackages,
+        surface = Surface.Scoped(allowedPackages),
         verbs = verbs,
         // Submit-class is never granted by this derivation, regardless of what the grant lists.
         sinkBudget = sinks - Sink.SUBMIT,

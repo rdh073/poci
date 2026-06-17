@@ -1,6 +1,7 @@
 package me.rerere.rikkahub.service
 
 import me.rerere.automation.cap.Sink
+import me.rerere.automation.cap.Surface
 import me.rerere.automation.cap.Verb
 import me.rerere.rikkahub.data.model.AutomationGrant
 import me.rerere.rikkahub.data.model.AutomationSink
@@ -112,7 +113,7 @@ class EffectiveAutomationCapabilityTest {
             now = now,
         )!!
 
-        assertEquals(setOf("com.example.target"), cap.surface)
+        assertEquals(Surface.Scoped(setOf("com.example.target")), cap.surface)
         assertEquals(setOf(Verb.OBSERVE, Verb.TAP), cap.verbs)
         assertEquals(sessionId, cap.sessionId)
         assertEquals(now + 5L * 60_000L, cap.lease.expiresAt)
@@ -162,7 +163,7 @@ class EffectiveAutomationCapabilityTest {
             now = now,
         )!!
 
-        assertEquals("per-run surface wins", setOf("com.perrun.app"), cap.surface)
+        assertEquals("per-run surface wins", Surface.Scoped(setOf("com.perrun.app")), cap.surface)
         assertEquals(now + 3L * 60_000L, cap.lease.expiresAt)
         assertEquals(10, cap.lease.maxSteps)
     }
@@ -183,7 +184,7 @@ class EffectiveAutomationCapabilityTest {
             now = now,
         )!!
 
-        assertEquals(setOf("com.assistant.default"), cap.surface)
+        assertEquals(Surface.Scoped(setOf("com.assistant.default")), cap.surface)
     }
 
     // --- #187 v2 activation policy: the master switch gates every grant source (finding 1) ---
