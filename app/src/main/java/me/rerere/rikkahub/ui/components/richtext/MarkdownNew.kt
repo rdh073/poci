@@ -164,15 +164,20 @@ private fun HtmlBlockElement(
             val src = element.attr("src")
             val alt = element.attr("alt")
             if (src.isNotEmpty()) {
+                val safeSrc = sanitizeLinkUri(src)
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    ZoomableAsyncImage(
-                        model = src,
-                        contentDescription = alt.takeIf { it.isNotEmpty() },
-                        modifier = Modifier
+                    if (safeSrc != null && isAllowedImageUri(safeSrc)) {
+                        ZoomableAsyncImage(
+                            model = safeSrc,
+                            contentDescription = alt.takeIf { it.isNotEmpty() },
+                            modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
                             .widthIn(min = 120.dp)
                             .heightIn(min = 120.dp),
-                    )
+                        )
+                    } else if (alt.isNotBlank()) {
+                        Text(text = alt)
+                    }
                 }
             }
         }

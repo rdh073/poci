@@ -110,14 +110,19 @@ internal fun HtmlInlineAsComposable(node: Node, onClickCitation: (String) -> Uni
                     val src = node.attr("src")
                     val alt = node.attr("alt")
                     if (src.isNotEmpty()) {
-                        ZoomableAsyncImage(
-                            model = src,
-                            contentDescription = alt.takeIf { it.isNotEmpty() },
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
+                        val safeSrc = sanitizeLinkUri(src)
+                        if (safeSrc != null && isAllowedImageUri(safeSrc)) {
+                            ZoomableAsyncImage(
+                                model = safeSrc,
+                                contentDescription = alt.takeIf { it.isNotEmpty() },
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
                                 .widthIn(min = 120.dp)
                                 .heightIn(min = 120.dp),
-                        )
+                            )
+                        } else if (alt.isNotBlank()) {
+                            Text(text = alt)
+                        }
                     }
                 }
 
@@ -303,9 +308,14 @@ internal fun AnnotatedString.Builder.appendHtmlInlineElement(
                         color = colorScheme.primary,
                         textDecoration = TextDecoration.Underline,
                     ).merge(cssStyle ?: SpanStyle())
-                    withLink(LinkAnnotation.Url(href)) {
-                        withStyle(linkStyle) {
-                            recurseChildren(element, style.merge(linkStyle.asTextStyle()))
+                    val safeHref = sanitizeLinkUri(href)
+                    if (safeHref == null) {
+                        appendElementChildren()
+                    } else {
+                        withLink(LinkAnnotation.Url(safeHref)) {
+                            withStyle(linkStyle) {
+                                recurseChildren(element, style.merge(linkStyle.asTextStyle()))
+                            }
                         }
                     }
                 }

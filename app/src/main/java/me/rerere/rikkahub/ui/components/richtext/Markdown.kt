@@ -394,15 +394,21 @@ private fun MarkdownNode(
                 ?: ""
             val linkDest =
                 node.findChildOfTypeRecursive(MarkdownElementTypes.LINK_DESTINATION)?.getTextInNode(content) ?: ""
+            val safeLinkDest = sanitizeLinkUri(linkDest)
             val context = LocalContext.current
-            Text(
-                text = linkText,
-                color = MaterialTheme.colorScheme.primary,
-                textDecoration = TextDecoration.Underline,
-                modifier = modifier.clickable {
-                    val intent = Intent(Intent.ACTION_VIEW, linkDest.toUri())
-                    context.startActivity(intent)
-                })
+            if (safeLinkDest == null) {
+                Text(text = linkText, color = MaterialTheme.colorScheme.onSurface)
+            } else {
+                Text(
+                    text = linkText,
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = TextDecoration.Underline,
+                    modifier = modifier.clickable {
+                        val intent = Intent(Intent.ACTION_VIEW, safeLinkDest.toUri())
+                        context.startActivity(intent)
+                    },
+                )
+            }
         }
 
         // 加粗和斜体
@@ -450,18 +456,23 @@ private fun MarkdownNode(
             val altText = node.findChildOfTypeRecursive(MarkdownElementTypes.LINK_TEXT)?.getTextInNode(content) ?: ""
             val imageUrl =
                 node.findChildOfTypeRecursive(MarkdownElementTypes.LINK_DESTINATION)?.getTextInNode(content) ?: ""
+            val safeImageUrl = sanitizeLinkUri(imageUrl)
             Column(
                 modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 // 这里可以使用Coil等图片加载库加载图片
-                ZoomableAsyncImage(
-                    model = imageUrl,
-                    contentDescription = altText,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .widthIn(min = 120.dp)
-                        .heightIn(min = 120.dp),
-                )
+                if (safeImageUrl != null && isAllowedImageUri(safeImageUrl)) {
+                    ZoomableAsyncImage(
+                        model = safeImageUrl,
+                        contentDescription = altText,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .widthIn(min = 120.dp)
+                            .heightIn(min = 120.dp),
+                    )
+                } else if (altText.isNotBlank()) {
+                    Text(text = altText)
+                }
             }
         }
 
@@ -931,9 +942,14 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
 
         node.type == GFMTokenTypes.GFM_AUTOLINK -> {
             val link = node.getTextInNode(content)
-            withLink(LinkAnnotation.Url(link)) {
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+            val safeLink = sanitizeLinkUri(link)
+            withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                if (safeLink == null) {
                     append(link)
+                } else {
+                    withLink(LinkAnnotation.Url(safeLink)) {
+                        append(link)
+                    }
                 }
             }
         }
@@ -1048,13 +1064,18 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
                     appendInlineContent("citation:$linkDest")
                 }
             } else {
-                withLink(LinkAnnotation.Url(linkDest)) {
-                    withStyle(
-                        SpanStyle(
-                            color = colorScheme.primary, textDecoration = TextDecoration.Underline
-                        )
-                    ) {
-                        append(linkText)
+                val safeLink = sanitizeLinkUri(linkDest)
+                if (safeLink == null) {
+                    append(linkText)
+                } else {
+                    withLink(LinkAnnotation.Url(safeLink)) {
+                        withStyle(
+                            SpanStyle(
+                                color = colorScheme.primary, textDecoration = TextDecoration.Underline
+                            )
+                        ) {
+                            append(linkText)
+                        }
                     }
                 }
             }
@@ -1063,9 +1084,17 @@ private fun AnnotatedString.Builder.appendMarkdownNodeContent(
         node.type == MarkdownElementTypes.AUTOLINK -> {
             val links = node.children.trim(MarkdownTokenTypes.LT, 1).trim(MarkdownTokenTypes.GT, 1)
             links.fastForEach { link ->
-                withLink(LinkAnnotation.Url(link.getTextInNode(content))) {
+                val href = link.getTextInNode(content)
+                val safeLink = sanitizeLinkUri(href)
+                if (safeLink == null) {
                     withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                        append(link.getTextInNode(content))
+                        append(href)
+                    }
+                } else {
+                    withLink(LinkAnnotation.Url(safeLink)) {
+                        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+                            append(href)
+                        }
                     }
                 }
             }

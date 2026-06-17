@@ -291,21 +291,26 @@ private fun RenderImage(
     val src = imgElement.attr("src")
     val alt = imgElement.attr("alt")
     if (src.isNotEmpty()) {
+        val safeSrc = sanitizeLinkUri(src)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 8.dp),
             contentAlignment = Alignment.Center
         ) {
-            ZoomableAsyncImage(
-                model = src,
-                contentDescription = alt.takeIf { it.isNotEmpty() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 400.dp)
-                    .clip(RoundedCornerShape(8.dp)),
-                contentScale = ContentScale.Fit,
-            )
+            if (safeSrc != null && isAllowedImageUri(safeSrc)) {
+                ZoomableAsyncImage(
+                    model = safeSrc,
+                    contentDescription = alt.takeIf { it.isNotEmpty() },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp)
+                        .clip(RoundedCornerShape(8.dp)),
+                    contentScale = ContentScale.Fit,
+                )
+            } else if (alt.isNotBlank()) {
+                Text(text = alt)
+            }
         }
     }
 }
