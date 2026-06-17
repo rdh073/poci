@@ -705,6 +705,10 @@ class ChatService(
         }
     }
 
+    // Handle for the kill-switch revoke action registered in init, released in cleanup so a
+    // recreated ChatService does not leak a stale handler that captures dead `sessions`.
+    private var killSwitchHandle: Any? = null
+
     init {
         // 添加生命周期观察者
         ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
@@ -714,7 +718,7 @@ class ChatService(
         // generation job. Cancelling the job tears down that session's in-flight capture by
         // structured concurrency (the capture is a child of the generation coroutine), so this is
         // the global kill-switch that legitimately stops ALL automation sessions at once.
-        automationKillSwitch.register {
+        killSwitchHandle = automationKillSwitch.register {
             sessions.values.forEach { session ->
                 if (session.activeAutomationGuard != null) {
                     session.revokeAutomation()
@@ -726,6 +730,8 @@ class ChatService(
 
     fun cleanup() = runCatching {
         ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
+        killSwitchHandle?.let { automationKillSwitch.unregister(it) }
+        killSwitchHandle = null
         sessions.values.forEach { it.cleanup() }
         sessions.clear()
     }
