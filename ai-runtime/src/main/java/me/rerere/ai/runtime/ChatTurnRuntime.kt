@@ -662,23 +662,7 @@ internal suspend fun executeTool(
                 // cancellation must propagate; otherwise stop-generation is misreported as a tool execution error
                 if (it is CancellationException) throw it
                 logSink.warn(TAG, "generateText: tool execution failed for ${tool.toolName}", it)
-                tool.copy(
-                    output = listOf(
-                        UIMessagePart.Text(
-                            json.encodeToString(
-                                buildJsonObject {
-                                    put(
-                                        "error",
-                                        JsonPrimitive(buildString {
-                                            append("[${it.javaClass.name}] ${it.message}")
-                                            append("\n${it.stackTraceToString()}")
-                                        })
-                                    )
-                                }
-                            )
-                        )
-                    )
-                )
+                tool.copy(output = toolExecutionErrorResult(json, it))
             }
         }
     }
@@ -711,6 +695,24 @@ internal fun emptyToolResultPlaceholder(json: Json): List<UIMessagePart> = listO
             buildJsonObject {
                 put("status", JsonPrimitive("ok"))
                 put("result", JsonPrimitive(""))
+            }
+        )
+    )
+)
+
+/**
+ * The model-facing tool_result for a tool that threw during execution. The full
+ * throwable (with stack trace) is logged separately for local debugging; this
+ * payload carries only an actionable summary — exception simple name + message —
+ * and deliberately omits [Throwable.stackTraceToString], which would leak internal
+ * file paths, package layout, and line numbers into the conversation and any
+ * web/A2A surface. Extracted as a pure function so the redaction is unit-testable.
+ */
+internal fun toolExecutionErrorResult(json: Json, error: Throwable): List<UIMessagePart> = listOf(
+    UIMessagePart.Text(
+        json.encodeToString(
+            buildJsonObject {
+                put("error", JsonPrimitive("[${error.javaClass.simpleName}] ${error.message}"))
             }
         )
     )

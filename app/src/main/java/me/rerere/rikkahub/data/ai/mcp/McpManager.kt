@@ -184,7 +184,9 @@ class McpManager(
             },
             onHealFailed = {
                 Log.e(TAG, "callTool heal failed for ${config.commonOptions.name}", it)
-                listOf(UIMessagePart.Text("Failed to execute tool: ${it.message ?: it.javaClass.name}"))
+                // Model-facing tool output: simple class name only — never the package-qualified
+                // name, matching the tool-execution error redaction policy (no internal layout leak).
+                listOf(UIMessagePart.Text("Failed to execute tool: ${it.message ?: it.javaClass.simpleName}"))
             },
         )
     }
