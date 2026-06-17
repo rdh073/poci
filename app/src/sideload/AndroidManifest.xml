@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
       Sideload-only package visibility. The automation scope PICKER enumerates ALL installed packages
@@ -10,8 +11,12 @@
       QUERY_ALL_PACKAGES is Play-policy sensitive, so it is declared ONLY in this sideload flavor; the
       play build keeps the narrow <queries> MAIN/LAUNCHER visibility from the main manifest and the
       picker degrades to launchable apps. This permission feeds the UI picker ONLY — it is never wired
-      into the agent-facing list_app tool.
+      into the agent-facing list_app tool. The lint QueryAllPackagesPermission check is suppressed
+      deliberately: this is the intended, sideload-only broad visibility (the play build, which Play
+      policy governs, never declares it), not an oversight.
     -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission
+        android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
 
 </manifest>
