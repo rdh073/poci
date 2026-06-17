@@ -493,7 +493,10 @@ private fun HookEditDialog(
         },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 HookEvent.entries.forEach { candidate ->
                     FilterChip(
                         selected = event == candidate,

@@ -30,10 +30,12 @@ import me.rerere.hugeicons.stroke.ArrowDown01
  * scrollable body, and a trailing-aligned footer button row. Replaces AlertDialog
  * for multi-field editors so tall content gets vertical room and proper IME handling.
  *
- * The body sizes to its content (scrolls only when it would overflow the sheet's max
- * height), so short forms stay compact and long ones stay reachable. The drag handle
- * animates the sheet closed before invoking [onDismiss]; tapping the scrim also
- * dismisses. ExperimentalMaterial3Api is opted in module-wide (app/build.gradle.kts).
+ * The title and footer are pinned; only the body scrolls (weighted, fill = false), so the
+ * action buttons stay reachable on tall forms while short ones still size to their content.
+ * IME insets come from the sheet's default contentWindowInsets (BottomSheetDefaults), as in
+ * the existing ModeInjectionEditSheet — no extra imePadding. The drag handle animates the
+ * sheet closed before invoking [onDismiss]; tapping the scrim also dismisses.
+ * ExperimentalMaterial3Api is opted in module-wide (app/build.gradle.kts).
  */
 @Composable
 fun FormBottomSheet(
@@ -67,8 +69,7 @@ fun FormBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 16.dp)
-                .verticalScroll(rememberScrollState()),
+                .padding(bottom = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Text(
@@ -77,7 +78,14 @@ fun FormBottomSheet(
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
 
-            content()
+            Column(
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                content()
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
