@@ -909,21 +909,36 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
 }
 
 // 构建CSV内容，对包含逗号/引号/换行的字段进行转义
-private fun buildTableCsv(headerCells: List<String>, rows: List<List<String>>): String {
-    fun escape(field: String): String {
-        return if (field.any { it == ',' || it == '"' || it == '\n' }) {
-            "\"${field.replace("\"", "\"\"")}\""
-        } else {
-            field
-        }
-    }
+internal fun buildTableCsv(headerCells: List<String>, rows: List<List<String>>): String {
     return buildString {
-        appendLine(headerCells.joinToString(",") { escape(it) })
+        appendLine(headerCells.joinToString(",") { escapeCsvField(it) })
         rows.forEach { row ->
-            appendLine(row.joinToString(",") { escape(it) })
+            appendLine(row.joinToString(",") { escapeCsvField(it) })
         }
     }
 }
+
+/**
+ * The cell content is model-emitted untrusted text. A spreadsheet app (Excel,
+ * Sheets, LibreOffice) treats any field whose first character is `= + - @` or a
+ * leading tab/CR/LF as a live formula on open, so a table cell like
+ * `=HYPERLINK("http://evil","x")` or `=cmd|'/c calc'!A1` becomes code execution
+ * /data exfil at the recipient — CSV formula injection. Neutralize by prefixing a
+ * single quote so the value renders as text (the standard OWASP mitigation; a
+ * legitimate negative number is shown verbatim with a leading apostrophe, an
+ * accepted trade-off for untrusted export). RFC-4180 quoting is applied after.
+ */
+internal fun escapeCsvField(field: String): String {
+    val neutralized = if (field.firstOrNull() in CSV_FORMULA_TRIGGERS) "'$field" else field
+    return if (neutralized.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
+        "\"${neutralized.replace("\"", "\"\"")}\""
+    } else {
+        neutralized
+    }
+}
+
+// OWASP CSV-injection lead triggers: =, +, -, @, plus the control chars TAB/CR/LF.
+private val CSV_FORMULA_TRIGGERS = setOf('=', '+', '-', '@', '\t', '\r', '\n')
 
 private fun AnnotatedString.Builder.appendMarkdownNodeContent(
     node: ASTNode,
