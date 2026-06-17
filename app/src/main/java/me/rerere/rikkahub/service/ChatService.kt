@@ -267,6 +267,47 @@ internal fun effectiveAutomationCapability(
  * in the conversation is exactly "still open". PURE so the boundary is JVM-testable without the
  * service. (Mirrors the inline Pending checks the approval-resume + Stop-hook paths already use.)
  */
+/**
+ * The ordering-sensitive core of a SUBAGENT automation lease (Option B). Extracted + generic in [R] so
+ * the guard-before-overlay invariant is JVM-testable without a real `TaskRunResult`.
+ *
+ * INVARIANT (codex P1): the guard MUST be registered on [session] BEFORE the STOP overlay is exposed
+ * via [activation].activate. The kill-switch sweep acts only when [ConversationSession.hasActiveAutomation]
+ * is true, so a tap in the gap between "overlay is tappable" and "guard registered" would otherwise
+ * revoke nothing for a no-automation parent and the subagent would proceed with the kill switch already
+ * pressed. This mirrors the main lease's guard-before-activate order.
+ *
+ * Fail-closed: when no STOP overlay can be activated, the guard is deregistered + revoked and
+ * [onNoKillSwitch] runs (the subagent without automation tools — `ui_*` is never exposed without a
+ * reachable kill switch). On the active path [onActive] runs with the lease held; on EVERY exit
+ * (normal, error, cancellation) the guard is deregistered, the overlay deactivated, and the guard
+ * revoked exactly once.
+ */
+internal suspend fun <R> openSubagentAutomationLeaseOnSession(
+    session: ConversationSession,
+    guard: CapabilityGuard,
+    leaseKey: Uuid,
+    activation: AutomationActivationTracker,
+    onNoKillSwitch: suspend () -> R,
+    onActive: suspend () -> R,
+): R {
+    // Register BEFORE exposing the overlay so a kill-switch tap in the activation window sees the guard.
+    session.addSubagentAutomationGuard(guard)
+    if (!activation.activate(leaseKey)) {
+        session.removeSubagentAutomationGuard(guard)
+        guard.revoke()
+        return onNoKillSwitch()
+    }
+    return try {
+        onActive()
+    } finally {
+        session.removeSubagentAutomationGuard(guard)
+        activation.deactivate(leaseKey)
+        // Revoke on release so no lingering reference to the guard can authorize after the lease.
+        guard.revoke()
+    }
+}
+
 internal fun conversationHasPendingToolApproval(conversation: Conversation): Boolean =
     conversation.currentMessages.any { message ->
         message.parts.any { it is UIMessagePart.Tool && it.isPending }
@@ -1554,33 +1595,30 @@ class ChatService(
         val core = automationRegistry.core() ?: return block(emptyList())
 
         val guard = CapabilityGuard(capability = capability, clock = trustClock)
-        // Fail closed (design I9/§7): the subagent must not get ui_* tools without a reachable STOP
-        // kill switch. A failed activation drops the guard and runs the subagent without automation.
-        if (!automationActivation.activate(leaseKey)) {
-            guard.revoke()
-            return block(emptyList())
-        }
-        session.addSubagentAutomationGuard(guard)
-        return try {
-            val autoTools = getUiAutomationTools(
-                guard = guard,
-                core = core,
-                foregroundPkg = { automationRegistry.foregroundPackage() },
-                // Same rule as the main turn: YOLO (includeHost) auto-approves the submit-class
-                // confirm; otherwise the overlay channel, or fail-closed AlwaysDeny if none.
-                confirm = if (guard.includeHost) {
-                    AlwaysConfirm
-                } else {
-                    automationRegistry.confirmChannel() ?: AlwaysDeny
-                },
-            )
-            block(autoTools)
-        } finally {
-            session.removeSubagentAutomationGuard(guard)
-            automationActivation.deactivate(leaseKey)
-            // Revoke on release so no lingering reference to the guard can authorize after the lease.
-            guard.revoke()
-        }
+        // The ordering-sensitive lease (register-before-activate, fail-closed, release-on-every-exit)
+        // is [openSubagentAutomationLeaseOnSession] so the guard-before-overlay invariant is testable.
+        return openSubagentAutomationLeaseOnSession(
+            session = session,
+            guard = guard,
+            leaseKey = leaseKey,
+            activation = automationActivation,
+            onNoKillSwitch = { block(emptyList()) },
+            onActive = {
+                val autoTools = getUiAutomationTools(
+                    guard = guard,
+                    core = core,
+                    foregroundPkg = { automationRegistry.foregroundPackage() },
+                    // Same rule as the main turn: YOLO (includeHost) auto-approves the submit-class
+                    // confirm; otherwise the overlay channel, or fail-closed AlwaysDeny if none.
+                    confirm = if (guard.includeHost) {
+                        AlwaysConfirm
+                    } else {
+                        automationRegistry.confirmChannel() ?: AlwaysDeny
+                    },
+                )
+                block(autoTools)
+            },
+        )
     }
 
     // ---- 处理消息补全 ----

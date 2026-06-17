@@ -2,6 +2,7 @@ package me.rerere.rikkahub.service
 
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import me.rerere.automation.cap.Capability
 import me.rerere.automation.cap.CapabilityGuard
 import me.rerere.automation.cap.Lease
@@ -9,6 +10,7 @@ import me.rerere.automation.cap.Surface
 import me.rerere.automation.cap.TrustClock
 import me.rerere.automation.cap.Verb
 import me.rerere.rikkahub.data.model.Conversation
+import me.rerere.rikkahub.service.automation.AutomationActivationTracker
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -78,5 +80,62 @@ class ConversationSessionSubagentAutomationTest {
 
         assertTrue("the main lease guard must be revoked", main.isRevoked)
         assertTrue("the subagent lease guard must be revoked", sub.isRevoked)
+    }
+
+    // ---- codex P1: the guard must be registered BEFORE the STOP overlay becomes tappable ----
+    @Test
+    fun `subagent lease registers the guard before exposing the STOP overlay`() {
+        val s = session()
+        val g = guard()
+        // The overlay's showOverlay fires the instant STOP becomes tappable. At that moment the kill
+        // switch must already see the guard, or a tap in the gap would revoke nothing.
+        var overlaySawActiveAutomation = false
+        val tracker = AutomationActivationTracker(
+            showOverlay = { overlaySawActiveAutomation = s.hasActiveAutomation(); true },
+            hideOverlay = {},
+        )
+
+        runBlocking {
+            openSubagentAutomationLeaseOnSession(
+                session = s,
+                guard = g,
+                leaseKey = Uuid.random(),
+                activation = tracker,
+                onNoKillSwitch = { error("the kill switch was reachable; onNoKillSwitch must not run") },
+                onActive = {
+                    assertTrue("the guard must be registered during the active lease", s.hasActiveAutomation())
+                },
+            )
+        }
+
+        assertTrue(
+            "the guard must be registered before the STOP overlay is exposed (no lost-STOP race)",
+            overlaySawActiveAutomation,
+        )
+        assertFalse("the guard is deregistered after the lease", s.hasActiveAutomation())
+        assertTrue("the guard is revoked on release", g.isRevoked)
+    }
+
+    @Test
+    fun `subagent lease fails closed when no STOP overlay is reachable`() {
+        val s = session()
+        val g = guard()
+        val tracker = AutomationActivationTracker(showOverlay = { false }, hideOverlay = {})
+        var ranWithoutTools = false
+
+        runBlocking {
+            openSubagentAutomationLeaseOnSession(
+                session = s,
+                guard = g,
+                leaseKey = Uuid.random(),
+                activation = tracker,
+                onNoKillSwitch = { ranWithoutTools = true },
+                onActive = { error("automation must not be exposed without a reachable kill switch") },
+            )
+        }
+
+        assertTrue("no reachable STOP ⇒ run without automation tools", ranWithoutTools)
+        assertFalse("the guard is deregistered on the fail-closed path", s.hasActiveAutomation())
+        assertTrue("the guard is revoked on the fail-closed path", g.isRevoked)
     }
 }
