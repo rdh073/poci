@@ -1,6 +1,5 @@
 package me.rerere.rikkahub.ui.pages.setting.providerdetail
 
-import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -8,18 +7,20 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingToolbarDefaults.ScreenOffset
 import androidx.compose.material3.FloatingToolbarDefaults.floatingToolbarVerticalNestedScroll
 import androidx.compose.material3.HorizontalFloatingToolbar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -27,15 +28,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import me.rerere.ai.provider.ProviderManager
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import me.rerere.ai.provider.ConnectionResult
 import me.rerere.ai.provider.ProviderSetting
 import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.ext.plus
-import org.koin.compose.koinInject
+import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-
-private const val TAG = "SettingProviderDetailPage"
 
 /**
  * Picks which [ProviderSetting] authenticates the listModels fetch in the Models tab.
@@ -55,24 +55,23 @@ internal fun selectModelFetchSetting(
 internal fun ModelList(
     providerSetting: ProviderSetting,
     draft: ProviderSetting,
-    onUpdateProvider: (ProviderSetting) -> Unit
+    onUpdateProvider: (ProviderSetting) -> Unit,
+    vm: ProviderDetailViewModel = koinViewModel(),
 ) {
-    val providerManager = koinInject<ProviderManager>()
     val fetchSetting = selectModelFetchSetting(providerSetting, draft)
-    val modelList by produceState(emptyList(), fetchSetting) {
-        runCatching {
-            value = providerManager.getProviderByType(fetchSetting)
-                .listModels(fetchSetting)
-                .sortedBy { it.modelId }
-                .toList()
-        }.onFailure {
-            if (it is kotlinx.coroutines.CancellationException) {
-                Log.d(TAG, "listModels cancelled")
-            } else {
-                Log.e(TAG, "listModels failed", it)
-            }
-        }
+    val catalogState by vm.catalog.collectAsStateWithLifecycle()
+
+    // Fetch the catalog through the ViewModel so a failed fetch becomes an explicit, classified
+    // ModelCatalogState.Failed (the user sees WHY) instead of produceState(emptyList())'s silent
+    // empty list — failure and empty success used to be indistinguishable. Keyed on fetchSetting so
+    // a saved config change re-fetches; the VM cancels any superseded fetch.
+    LaunchedEffect(fetchSetting) {
+        vm.refreshCatalog(fetchSetting)
     }
+
+    val modelList = (catalogState as? ModelCatalogState.Loaded)?.models
+        ?.sortedBy { it.modelId }
+        .orEmpty()
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
@@ -101,18 +100,44 @@ internal fun ModelList(
                             .fillParentMaxHeight(0.8f)
                             .fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
+                        verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)
                     ) {
-                        Text(
-                            text = stringResource(R.string.setting_provider_page_no_models),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = stringResource(R.string.setting_provider_page_add_models_hint),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
+                        when (val state = catalogState) {
+                            is ModelCatalogState.Loading -> {
+                                CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                                Text(
+                                    text = "Fetching models…",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            is ModelCatalogState.Failed -> {
+                                Text(
+                                    text = connectionResultTitle(state.result),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Text(
+                                    text = connectionResultHint(state.result),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+
+                            else -> {
+                                Text(
+                                    text = stringResource(R.string.setting_provider_page_no_models),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = stringResource(R.string.setting_provider_page_add_models_hint),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                            }
+                        }
                     }
                 }
             } else {
@@ -167,4 +192,28 @@ internal fun ModelList(
             )
         }
     }
+}
+
+/** Short headline for a connection verdict (English; localization deferred per CLAUDE.md i18n rule). */
+internal fun connectionResultTitle(result: ConnectionResult): String = when (result) {
+    is ConnectionResult.Valid ->
+        if (result.rateLimited) "Connected (rate-limited)" else "Connected"
+
+    is ConnectionResult.InvalidKey -> "Invalid API key"
+    ConnectionResult.ReachableNoModelList -> "Connected — no model list"
+    ConnectionResult.UnreachableOrWrongEndpoint -> "Couldn't reach the provider"
+}
+
+/** Actionable next-step hint for a connection verdict. */
+internal fun connectionResultHint(result: ConnectionResult): String = when (result) {
+    is ConnectionResult.Valid ->
+        if (result.rateLimited) "Rate limited — wait a moment and test again."
+        else "Found ${result.modelCount} models."
+
+    is ConnectionResult.InvalidKey -> "Check your API key, then test the connection again."
+    ConnectionResult.ReachableNoModelList ->
+        "This provider doesn't expose a model list. Add models manually."
+
+    ConnectionResult.UnreachableOrWrongEndpoint ->
+        "Check the Base URL / API Path, or add a model manually and test again."
 }
