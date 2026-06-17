@@ -103,6 +103,7 @@ import me.rerere.rikkahub.data.ai.tools.createSearchTools
 import me.rerere.rikkahub.data.ai.tools.createSkillTools
 import me.rerere.rikkahub.data.ai.tools.createWorkspaceTools
 import me.rerere.rikkahub.data.ai.tools.getUiAutomationTools
+import me.rerere.rikkahub.service.automation.AUTOMATION_YOLO_SUPPORTED
 import me.rerere.rikkahub.service.automation.AutomationActivationTracker
 import me.rerere.rikkahub.service.automation.AutomationKillSwitch
 import me.rerere.rikkahub.service.automation.AutomationRuntimeRegistry
@@ -232,6 +233,11 @@ internal fun effectiveAutomationCapability(
     // YOLO is honored ONLY once the user has acknowledged the danger (a global one-time consent stored
     // in DisplaySetting). Default false so the fail-closed scoped posture holds unless explicitly set.
     yoloAcknowledged: Boolean = false,
+    // YOLO availability is also FLAVOR-gated at this derivation chokepoint, not just in the UI: the
+    // Play build passes false so a restored/imported settings.json (carrying yolo=true + acknowledged)
+    // can never mint an Unbounded/host-inclusive capability on Play. Default true preserves the
+    // sideload/kernel-logic behavior for callers/tests that don't thread the flavor policy.
+    yoloSupported: Boolean = true,
 ): Capability? {
     // The master switch gates the whole expression; a pending grant may override the standing grant,
     // but neither branch contributes authority while UI automation is disabled.
@@ -239,9 +245,10 @@ internal fun effectiveAutomationCapability(
     // Per-run precedence with a YOLO floor (codex P0-4): a pending (per-run) grant overrides the
     // standing scope, but it can NEVER widen to YOLO — strip its yolo flag so a generic pending-grant
     // path cannot mint Unbounded for a non-YOLO assistant. YOLO comes ONLY from the standing assistant
-    // grant, and ONLY when the danger acknowledgement is present; otherwise it degrades to scoped.
+    // grant, ONLY when the danger acknowledgement is present, AND only on a flavor that supports it;
+    // otherwise it degrades to scoped.
     val effectiveGrant = (pendingGrant?.copy(yolo = false)) ?: assistantGrant
-    val gatedGrant = if (effectiveGrant.yolo && !yoloAcknowledged) {
+    val gatedGrant = if (effectiveGrant.yolo && (!yoloAcknowledged || !yoloSupported)) {
         effectiveGrant.copy(yolo = false)
     } else {
         effectiveGrant
@@ -1461,6 +1468,9 @@ class ChatService(
             sessionId = conversationId.toString(),
             now = trustClock.now(),
             yoloAcknowledged = yoloAcknowledged,
+            // Flavor-gate YOLO at the derivation: false on Play, so restored/imported acknowledged+yolo
+            // state can never mint an unrestricted capability there (the empty UI seam is not enough).
+            yoloSupported = AUTOMATION_YOLO_SUPPORTED,
         )
         val automationGuard: CapabilityGuard? = capability?.let { cap ->
             CapabilityGuard(capability = cap, clock = trustClock)

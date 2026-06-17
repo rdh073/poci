@@ -358,4 +358,46 @@ class EffectiveAutomationCapabilityTest {
         )
         assertTrue("a pending grant can never include the host", !cap.includeHost)
     }
+
+    @Test
+    fun `an unsupported flavor strips YOLO even when acknowledged`() {
+        // The Play flavor passes yoloSupported=false. A restored/imported settings.json carrying both
+        // yolo=true AND automationYoloAcknowledged=true must STILL not mint an unrestricted capability —
+        // the derivation chokepoint is the runtime half of the sideload-only boundary (codex P1).
+        val cap = effectiveAutomationCapability(
+            pendingGrant = null,
+            assistantGrant = yoloGrant().copy(
+                allowedPackages = setOf("com.scoped.fallback"),
+                verbs = setOf(AutomationVerb.OBSERVE),
+            ),
+            masterSwitchEnabled = true,
+            sessionId = sessionId,
+            now = now,
+            yoloAcknowledged = true,
+            yoloSupported = false,
+        )!!
+
+        assertEquals(
+            "a flavor that does not support YOLO must fall back to the scoped surface, never Unbounded",
+            Surface.Scoped(setOf("com.scoped.fallback")),
+            cap.surface,
+        )
+        assertTrue("an unsupported flavor never includes the host", !cap.includeHost)
+    }
+
+    @Test
+    fun `an unsupported flavor with an empty-scope YOLO grant derives nothing`() {
+        // The exact Play-restore exploit shape: yolo + acknowledged but no scoped fallback packages.
+        // Stripping yolo leaves an enabled-but-empty-surface grant ⇒ no capability (deny-all).
+        val cap = effectiveAutomationCapability(
+            pendingGrant = null,
+            assistantGrant = yoloGrant(), // empty allowedPackages
+            masterSwitchEnabled = true,
+            sessionId = sessionId,
+            now = now,
+            yoloAcknowledged = true,
+            yoloSupported = false,
+        )
+        assertNull("an unsupported flavor must not mint a YOLO capability from imported state", cap)
+    }
 }
