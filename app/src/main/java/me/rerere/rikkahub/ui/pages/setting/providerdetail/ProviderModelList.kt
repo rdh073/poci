@@ -1,9 +1,12 @@
 package me.rerere.rikkahub.ui.pages.setting.providerdetail
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
@@ -11,10 +14,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingToolbarDefaults.ScreenOffset
 import androidx.compose.material3.FloatingToolbarDefaults.floatingToolbarVerticalNestedScroll
 import androidx.compose.material3.HorizontalFloatingToolbar
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,7 +36,11 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.ai.provider.ConnectionResult
 import me.rerere.ai.provider.ProviderSetting
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.Package01
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.Screen
+import me.rerere.rikkahub.ui.context.LocalNavController
 import me.rerere.rikkahub.ui.ext.plus
 import org.koin.androidx.compose.koinViewModel
 import sh.calvin.reorderable.ReorderableItem
@@ -60,6 +69,7 @@ internal fun ModelList(
 ) {
     val fetchSetting = selectModelFetchSetting(providerSetting, draft)
     val catalogState by vm.catalog.collectAsStateWithLifecycle()
+    val navController = LocalNavController.current
 
     // Fetch the catalog through the ViewModel so a failed fetch becomes an explicit, classified
     // ModelCatalogState.Failed (the user sees WHY) instead of produceState(emptyList())'s silent
@@ -69,9 +79,6 @@ internal fun ModelList(
         vm.refreshCatalog(fetchSetting)
     }
 
-    val modelList = (catalogState as? ModelCatalogState.Loaded)?.models
-        ?.sortedBy { it.modelId }
-        .orEmpty()
     var expanded by rememberSaveable { mutableStateOf(true) }
     val lazyListState = rememberLazyListState()
     val reorderableLazyListState = rememberReorderableLazyListState(lazyListState) { from, to ->
@@ -177,19 +184,34 @@ internal fun ModelList(
                 .align(Alignment.BottomCenter)
                 .offset(y = -ScreenOffset),
         ) {
-            AddModelButton(
-                models = modelList,
-                selectedModels = providerSetting.models,
-                onAddModel = {
-                    onUpdateProvider(providerSetting.addModel(it))
-                },
-                onRemoveModel = {
-                    onUpdateProvider(providerSetting.delModel(it))
-                },
-                expanded = expanded,
-                parentProvider = providerSetting,
-                onUpdateProvider = onUpdateProvider
-            )
+            // Browsing/adding models is a full-screen route now (search + toggle + bulk-enable +
+            // manual-add), replacing the cramped bottom-sheet picker.
+            Button(
+                onClick = {
+                    navController.navigate(
+                        Screen.SettingProviderModelBrowser(providerId = providerSetting.id.toString())
+                    )
+                }
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        HugeIcons.Package01,
+                        contentDescription = stringResource(R.string.setting_provider_page_add_model),
+                    )
+                    AnimatedVisibility(expanded) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(modifier = Modifier.size(8.dp))
+                            Text(
+                                stringResource(R.string.setting_provider_page_add_new_model),
+                                style = MaterialTheme.typography.bodyLarge,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

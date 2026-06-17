@@ -117,6 +117,7 @@ import me.rerere.rikkahub.ui.pages.setting.mcp.SettingMcpPage
 import me.rerere.rikkahub.ui.pages.setting.SettingModelPage
 import me.rerere.rikkahub.ui.pages.knowledge.KnowledgeBasePage
 import me.rerere.rikkahub.ui.pages.setting.SettingPage
+import me.rerere.rikkahub.ui.pages.setting.providerdetail.ProviderModelBrowserPage
 import me.rerere.rikkahub.ui.pages.setting.providerdetail.SettingProviderDetailPage
 import me.rerere.rikkahub.ui.pages.setting.SettingProviderPage
 import me.rerere.rikkahub.ui.pages.setting.SettingSearchDetailPage
@@ -455,6 +456,10 @@ class RouteActivity : ComponentActivity() {
                                 SettingProviderDetailPage(id = id, initialTab = key.initialTab)
                             }
 
+                            entry<Screen.SettingProviderModelBrowser> { key ->
+                                ProviderModelBrowserPage(providerId = Uuid.parse(key.providerId))
+                            }
+
                             entry<Screen.SettingModels> {
                                 SettingModelPage()
                             }
@@ -695,6 +700,9 @@ sealed interface Screen : NavKey {
         // freshly-added provider goes straight to fetching/picking its model catalog.
         val initialTab: Int = 0,
     ) : Screen
+
+    @Serializable
+    data class SettingProviderModelBrowser(val providerId: String) : Screen
 
     @Serializable
     data object SettingModels : Screen
