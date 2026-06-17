@@ -37,9 +37,11 @@ import me.rerere.ai.runtime.contract.RuntimeLogSink
 import me.rerere.ai.runtime.contract.TurnConfig
 import me.rerere.ai.runtime.contract.TurnMessageTransforms
 import me.rerere.ai.runtime.hooks.HookDecision
+import me.rerere.ai.runtime.hooks.HookDispatchLimits
 import me.rerere.ai.runtime.hooks.HookDispatchContext
 import me.rerere.ai.runtime.hooks.HookDispatcher
 import me.rerere.ai.runtime.hooks.HookEvent
+import me.rerere.ai.runtime.hooks.HookWorkBudget
 import me.rerere.ai.runtime.hooks.markDeniedByHook
 import me.rerere.ai.runtime.knowledge.KnowledgeBudget
 import me.rerere.ai.runtime.knowledge.KnowledgeContextAssembler
@@ -127,6 +129,7 @@ class ChatTurnRuntime(
         // type — the same cast the app's ProviderManager.getProviderByType already performs; the runtime
         // only ever calls it with the [provider] just resolved for [model], so the cast is sound.
         val providerImpl = resolver.provider(provider) as Provider<ProviderSetting>
+        val hookWorkBudget = HookWorkBudget(HookDispatchLimits())
 
         var messages: List<UIMessage> = messages
 
@@ -199,7 +202,11 @@ class ChatTurnRuntime(
                 // the needsApproval gate below. Approval resolves by toolCallId, not input, so a
                 // post-gate rewrite would let the user approve stale input. Decisions map onto the
                 // EXISTING approval states — no new execution path.
-                val hookedTools = applyPreToolUseHooks(tools, assistant)
+                val hookedTools = applyPreToolUseHooks(
+                    tools = tools,
+                    assistant = assistant,
+                    budget = hookWorkBudget,
+                )
 
                 // Check for tools that need approval
                 var hasPendingApproval = false
@@ -288,6 +295,7 @@ class ChatTurnRuntime(
     private suspend fun applyPreToolUseHooks(
         tools: List<UIMessagePart.Tool>,
         assistant: AssistantConfig,
+        budget: HookWorkBudget,
     ): List<UIMessagePart.Tool> {
         val dispatcher = hookDispatcher ?: return tools
         // No PreToolUse hooks configured: skip the per-tool payload encode + dispatch entirely.
@@ -303,7 +311,11 @@ class ChatTurnRuntime(
                         put("toolInput", tool.input)
                     }
                 ),
-                ctx = HookDispatchContext(config = assistant.hooks, toolName = tool.toolName),
+                ctx = HookDispatchContext(
+                    config = assistant.hooks,
+                    toolName = tool.toolName,
+                    budget = budget,
+                ),
             )
             val rewritten = result.updatedInput?.let { tool.copy(input = it) } ?: tool
             when (val decision = result.decision) {
