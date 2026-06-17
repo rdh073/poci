@@ -80,9 +80,10 @@ internal fun ModelList(
 
     // Fetch the catalog through the ViewModel so a failed fetch becomes an explicit, classified
     // ModelCatalogState.Failed (the user sees WHY) instead of produceState(emptyList())'s silent
-    // empty list — failure and empty success used to be indistinguishable. Keyed on fetchSetting so
-    // a saved config change re-fetches; the VM cancels any superseded fetch.
-    LaunchedEffect(fetchSetting) {
+    // empty list — failure and empty success used to be indistinguishable. Keyed on a models-stripped
+    // config fingerprint so a config change (key/baseUrl) re-fetches but a model add/del does NOT;
+    // the VM cancels any superseded fetch.
+    LaunchedEffect(fetchSetting.copyProvider(models = emptyList())) {
         vm.refreshCatalog(fetchSetting)
     }
 

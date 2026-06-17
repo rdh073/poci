@@ -70,25 +70,28 @@ fun ProviderModelBrowserPage(
     val provider = settings.providers.find { it.id == providerId } ?: return
     val catalogState by detailVM.catalog.collectAsStateWithLifecycle()
 
-    LaunchedEffect(provider.id) { detailVM.refreshCatalog(provider) }
+    // Re-fetch when the provider CONFIG changes (key / baseUrl / endpoint), not just on id. The
+    // toolbar persists the unsaved Config draft right before navigating here, and that write lands
+    // asynchronously — keying on a models-stripped config fingerprint makes the freshly-saved config
+    // trigger a refetch instead of leaving the first (stale) fetch standing. Model toggles don't
+    // change this key, so they don't cause redundant refetches.
+    LaunchedEffect(provider.copyProvider(models = emptyList())) { detailVM.refreshCatalog(provider) }
 
     var query by rememberSaveable { mutableStateOf("") }
     val catalog = (catalogState as? ModelCatalogState.Loaded)?.models.orEmpty()
     val enabledIds = remember(provider.models) { provider.models.map { it.modelId }.toSet() }
     val filtered = remember(catalog, query) { filterModels(catalog, query).sortedBy { it.modelId } }
 
-    // Read-modify-write over the captured `settings` snapshot — the same mutation pattern the rest
-    // of the provider UI uses (onUpdateProvider everywhere). Two toggles fired within one state
-    // round-trip could in theory race; not worth a bespoke atomic path here when bulk enable/disable
-    // is a single write and single toggles re-read after each recomposition. An app-wide atomic
-    // settingsStore.update {} would be the real fix, out of scope for this screen.
-    fun updateProvider(newProvider: ProviderSetting) {
-        settingVM.updateSettings(
-            settings.copy(providers = settings.providers.map { if (it.id == newProvider.id) newProvider else it })
-        )
+    // Atomic per-item mutation: [transform] runs against the CURRENT persisted provider (looked up
+    // by id inside settingsStore.update), not the captured snapshot, so fast consecutive toggles
+    // can't clobber each other.
+    fun mutateProvider(transform: (ProviderSetting) -> ProviderSetting) {
+        settingVM.updateSettings { current ->
+            current.copy(providers = current.providers.map { if (it.id == providerId) transform(it) else it })
+        }
     }
 
-    val manualAdd = useEditState<Model> { updateProvider(provider.addModel(it)) }
+    val manualAdd = useEditState<Model> { model -> mutateProvider { it.addModel(model) } }
 
     Scaffold(
         topBar = {
@@ -137,10 +140,13 @@ fun ProviderModelBrowserPage(
                 canBulkEnable(query, filtered, enabledIds) -> {
                     TextButton(
                         onClick = {
-                            val toAdd = filtered
-                                .filter { it.modelId !in enabledIds }
-                                .map { it.withRegistryMeta() }
-                            updateProvider(provider.copyProvider(models = provider.models + toAdd))
+                            mutateProvider { p ->
+                                val already = p.models.map { it.modelId }.toSet()
+                                val toAdd = filtered
+                                    .filter { it.modelId !in already }
+                                    .map { it.withRegistryMeta() }
+                                p.copyProvider(models = p.models + toAdd)
+                            }
                         },
                         modifier = Modifier.align(Alignment.End),
                     ) { Text("Enable all $unselectedCount") }
@@ -149,13 +155,13 @@ fun ProviderModelBrowserPage(
                 canBulkDisable(query, filtered, enabledIds) -> {
                     TextButton(
                         onClick = {
-                            updateProvider(
-                                provider.copyProvider(
-                                    models = provider.models.filter { enabled ->
+                            mutateProvider { p ->
+                                p.copyProvider(
+                                    models = p.models.filter { enabled ->
                                         filtered.none { it.modelId == enabled.modelId }
                                     }
                                 )
-                            )
+                            }
                         },
                         modifier = Modifier.align(Alignment.End),
                     ) { Text("Disable all") }
@@ -175,11 +181,13 @@ fun ProviderModelBrowserPage(
                         model = model,
                         enabled = enabled,
                         onToggle = {
-                            if (enabled) {
-                                val enabledModel = provider.models.firstOrNull { it.modelId == model.modelId }
-                                if (enabledModel != null) updateProvider(provider.delModel(enabledModel))
-                            } else {
-                                updateProvider(provider.addModel(model.withRegistryMeta()))
+                            // Decide enable-vs-disable from the CURRENT persisted models inside the
+                            // atomic update, not the captured `enabled` flag, so a stale snapshot
+                            // can't double-add or no-op.
+                            mutateProvider { p ->
+                                val existing = p.models.firstOrNull { it.modelId == model.modelId }
+                                if (existing != null) p.delModel(existing)
+                                else p.addModel(model.withRegistryMeta())
                             }
                         },
                     )

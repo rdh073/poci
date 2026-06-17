@@ -103,26 +103,42 @@ class OpenAIProvider(
         modelId: String,
     ): ProbeOutcome = withContext(Dispatchers.IO) {
         val key = keyRoulette.next(providerSetting.apiKey, providerSetting.id.toString())
-        val body = buildJsonObject {
-            put("model", modelId)
-            putJsonArray("messages") {
-                add(buildJsonObject {
-                    put("role", JsonPrimitive("user"))
-                    put("content", JsonPrimitive("hi"))
-                })
-            }
-            put("max_tokens", JsonPrimitive(1))
+        // Probe whichever generation API this provider actually uses: a Responses-API-only endpoint
+        // has no /chat/completions, so probing chat there would read as unreachable. For the chat
+        // path, honor the configured chatCompletionsPath (proxies remap it).
+        val (url, body, successField) = if (providerSetting.useResponseApi) {
+            Triple(
+                "${providerSetting.baseUrl}/responses",
+                buildJsonObject {
+                    put("model", modelId)
+                    put("input", JsonPrimitive("hi"))
+                    put("max_output_tokens", JsonPrimitive(16))
+                },
+                "output",
+            )
+        } else {
+            Triple(
+                "${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}",
+                buildJsonObject {
+                    put("model", modelId)
+                    putJsonArray("messages") {
+                        add(buildJsonObject {
+                            put("role", JsonPrimitive("user"))
+                            put("content", JsonPrimitive("hi"))
+                        })
+                    }
+                    put("max_tokens", JsonPrimitive(1))
+                },
+                "choices",
+            )
         }
-        // Honor the configured chat-completions path (proxies often remap it). This probes the
-        // chat-completions endpoint even when generation uses the Responses API — it's a
-        // reachability/auth check, and OpenAI-compatible endpoints expose chat/completions.
         val request = Request.Builder()
-            .url("${providerSetting.baseUrl}${providerSetting.chatCompletionsPath}")
+            .url(url)
             .addHeader("Authorization", "Bearer $key")
             .addHeader("Content-Type", "application/json")
             .post(json.encodeToString(body).toRequestBody("application/json".toMediaType()))
             .build()
-        runChatProbe(client, request) { jsonObjectHasField(it, "choices") }
+        runChatProbe(client, request) { jsonObjectHasField(it, successField) }
     }
 
     private fun parseModels(bodyStr: String): List<Model> {
