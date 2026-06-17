@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,6 +57,25 @@ internal fun McpServerConfigModal(state: EditState<McpServerConfig>) {
         // field edit). Drives the Connect/Reconnect button below.
         val status by remember(config.id) { mcpManager.getStatus(config) }
             .collectAsStateWithLifecycle(initialValue = McpStatus.Idle)
+
+        // sync() writes the discovered tools to SETTINGS by id, not to this draft. Merge the stored
+        // tools into the draft REACTIVELY — whenever they change (i.e. after a connect/reconnect) —
+        // preserving any enable/needsApproval the user has toggled in the draft. This is why the
+        // Tools tab populates after connecting without reopening the sheet, and (unlike adopting a
+        // click-time snapshot) it can never revert an edit made while the connection was in flight.
+        val storedTools = settingsStore.settingsFlow.collectAsStateWithLifecycle().value
+            .mcpServers.find { it.id == config.id }?.commonOptions?.tools
+        LaunchedEffect(storedTools) {
+            val stored = storedTools ?: return@LaunchedEffect
+            val merged = stored.map { st ->
+                config.commonOptions.tools.find { it.name == st.name }
+                    ?.let { st.copy(enable = it.enable, needsApproval = it.needsApproval) }
+                    ?: st
+            }
+            if (merged != config.commonOptions.tools) {
+                updateValue(config.clone(commonOptions = config.commonOptions.copy(tools = merged)))
+            }
+        }
 
         // Persist the draft to settings WITHOUT dismissing the sheet, upserting by id (the first save
         // of a new server appends it, later saves update it). Awaited so a follow-up connect's sync()
@@ -114,36 +134,34 @@ internal fun McpServerConfigModal(state: EditState<McpServerConfig>) {
                     }
                 }
 
-                ConnectionStatusRow(status)
-
                 val nameValid = config.commonOptions.name.isNotBlank()
+                val enabled = config.commonOptions.enable
                 val busy = status is McpStatus.Connecting || status is McpStatus.Reconnecting
+
+                ConnectionStatusRow(status = status, disabled = !enabled)
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Connect when never connected; Reconnect once it has been tried (error/connected).
+                    // Connect when never tried; Reconnect once it has been (connected/errored). Gated
+                    // on `enable` because the auto-connect manager only keeps ENABLED servers and would
+                    // tear down a manually-connected disabled one on the next settings emission.
                     TextButton(
-                        enabled = nameValid && !busy,
+                        enabled = nameValid && enabled && !busy,
                         onClick = {
                             scope.launch {
-                                // Persist first so sync() can locate the server by id, then connect.
                                 persist(config)
-                                mcpManager.addClient(config)
-                                // Adopt the tools sync() just wrote to settings so the Tools tab shows
-                                // them without reopening the sheet.
-                                settingsStore.settingsFlow.value.mcpServers
-                                    .find { it.id == config.id }
-                                    ?.let { synced ->
-                                        updateValue(
-                                            config.clone(
-                                                commonOptions = config.commonOptions.copy(
-                                                    tools = synced.commonOptions.tools
-                                                )
-                                            )
-                                        )
-                                    }
+                                // Persisting an enabled server makes the manager auto-connect it when
+                                // it is not yet tracked (Idle) — one connect. When it is already
+                                // tracked (status != Idle), the auto-connect won't re-add the same id,
+                                // so trigger the reconnect explicitly. Either branch runs exactly one
+                                // connect for this id, so there is no persist-and-addClient double.
+                                if (status !is McpStatus.Idle) {
+                                    mcpManager.reconnect(config)
+                                }
+                                // Tools land via the reactive merge above once sync() writes them.
                             }
                         }
                     ) {
@@ -170,19 +188,24 @@ internal fun McpServerConfigModal(state: EditState<McpServerConfig>) {
 }
 
 @Composable
-private fun ConnectionStatusRow(status: McpStatus) {
-    val color = when (status) {
-        is McpStatus.Connected -> MaterialTheme.extendColors.green6
-        is McpStatus.Error -> MaterialTheme.extendColors.red6
-        is McpStatus.Connecting, is McpStatus.Reconnecting -> MaterialTheme.colorScheme.primary
-        is McpStatus.Idle -> MaterialTheme.colorScheme.outline
+private fun ConnectionStatusRow(status: McpStatus, disabled: Boolean) {
+    // A disabled (not-enabled) server can't be connected (see the Connect gate), so say why rather
+    // than just greying the button — but a live status (connecting/connected/error) still wins.
+    val showDisabledHint = disabled && (status is McpStatus.Idle)
+    val color = when {
+        showDisabledHint -> MaterialTheme.colorScheme.outline
+        status is McpStatus.Connected -> MaterialTheme.extendColors.green6
+        status is McpStatus.Error -> MaterialTheme.extendColors.red6
+        status is McpStatus.Connecting || status is McpStatus.Reconnecting -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outline
     }
-    val text = when (status) {
-        is McpStatus.Connected -> "Connected"
-        is McpStatus.Connecting -> "Connecting…"
-        is McpStatus.Reconnecting -> "Reconnecting ${status.attempt}/${status.maxAttempts}…"
-        is McpStatus.Error -> status.message
-        is McpStatus.Idle -> "Not connected"
+    val text = when {
+        showDisabledHint -> "Disabled — enable the server to connect"
+        status is McpStatus.Connected -> "Connected"
+        status is McpStatus.Connecting -> "Connecting…"
+        status is McpStatus.Reconnecting -> "Reconnecting ${status.attempt}/${status.maxAttempts}…"
+        status is McpStatus.Error -> status.message
+        else -> "Not connected"
     }
     Row(
         modifier = Modifier.fillMaxWidth(),
