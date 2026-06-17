@@ -399,13 +399,15 @@ class ResponseAPI(
                                 })
                             }
 
-                            is UIMessagePart.Image -> {
-                                if (contentBuffer.isNotEmpty()) {
-                                    addContentItem(MessageRole.ASSISTANT, contentBuffer)
-                                    contentBuffer.clear()
-                                }
-                                addContentItem(MessageRole.USER, listOf(part))
-                            }
+                            // An assistant-generated image (from image_generation) must NOT be replayed
+                            // into Responses history: it was previously emitted as a USER input_image,
+                            // attributing the model's own output to the user and corrupting multi-turn
+                            // history. The Responses API represents a prior generated image as an
+                            // image_generation_call item (id + result), which the stored Image part does
+                            // not carry — so the correct minimal behavior is to omit it from replay
+                            // rather than re-attribute it. Surrounding assistant text still flushes
+                            // normally as one assistant item.
+                            is UIMessagePart.Image -> {}
 
                             is UIMessagePart.Text -> {
                                 contentBuffer.add(part)

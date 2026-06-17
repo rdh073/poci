@@ -675,4 +675,38 @@ class ResponseAPIMessageTest {
             output = listOf(UIMessagePart.Text(output))
         )
     }
+
+    // ---- C25: an assistant-generated image must not be replayed as a USER input_image ----
+
+    @Test
+    fun `assistant generated image is omitted from replay, never re-attributed to user`() {
+        val assistantWithImage = UIMessage.assistant("here is your image").copy(
+            parts = listOf(
+                UIMessagePart.Text("here is your image"),
+                UIMessagePart.Image(url = "https://example.invalid/generated.png"),
+            ),
+        )
+
+        val items = invokeBuildMessages(listOf(assistantWithImage))
+
+        assertFalse(
+            "no user-role item may be synthesized from an assistant image",
+            items.any { it.jsonObject["role"]?.jsonPrimitive?.content == "user" },
+        )
+        assertFalse(
+            "the assistant image must not be replayed as input_image",
+            items.toString().contains("input_image"),
+        )
+        assertTrue("assistant text is preserved", items.toString().contains("here is your image"))
+    }
+
+    @Test
+    fun `a normal user message still produces a user item`() {
+        val items = invokeBuildMessages(listOf(UIMessage.user("look at this")))
+
+        assertTrue(
+            "a normal user message still produces a user item",
+            items.any { it.jsonObject["role"]?.jsonPrimitive?.content == "user" },
+        )
+    }
 }
