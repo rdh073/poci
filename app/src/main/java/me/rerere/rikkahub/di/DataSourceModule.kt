@@ -499,6 +499,10 @@ val dataSourceModule = module {
                     addInterceptor(HttpLoggingInterceptor().apply {
                         level = HttpLoggingInterceptor.Level.HEADERS
                         SECRET_HEADER_NAMES.forEach { redactHeader(it) }
+                        // HEADERS level prints the full request URL. Vertex (and some other
+                        // providers) carry the credential as a `?key=` query param, which
+                        // redactHeader does not touch — redact it from the logged URL too.
+                        redactQueryParams("key")
                     })
                 }
             }
