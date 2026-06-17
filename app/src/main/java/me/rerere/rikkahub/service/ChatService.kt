@@ -711,7 +711,10 @@ class ChatService(
         // the global kill-switch that legitimately stops ALL automation sessions at once.
         killSwitchHandle = automationKillSwitch.register {
             sessions.values.forEach { session ->
-                if (session.activeAutomationGuard != null) {
+                // Fire when the session has ANY live automation guard — the main lease OR a subagent
+                // lease (Option B): a no-automation parent can still own a spawned automation subagent,
+                // whose guard must be revoked and whose (child) coroutine must be cancelled via the job.
+                if (session.hasActiveAutomation()) {
                     session.revokeAutomation()
                     session.getJob()?.cancel()
                 }
