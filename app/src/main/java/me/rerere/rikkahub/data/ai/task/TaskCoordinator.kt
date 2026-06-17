@@ -23,6 +23,7 @@ import me.rerere.ai.runtime.task.TaskSpec
 import me.rerere.ai.runtime.task.TaskState
 import me.rerere.ai.ui.UIMessage
 import me.rerere.rikkahub.data.ai.GenerationHandler
+import me.rerere.rikkahub.data.ai.transformers.ChatMessageTransformers
 import me.rerere.rikkahub.data.ai.runtime.MonotonicTaskBudgetClock
 import me.rerere.rikkahub.data.ai.runtime.toAssistantConfig
 import me.rerere.rikkahub.data.ai.subagent.SubagentGenerate
@@ -118,6 +119,7 @@ class TaskCoordinator(
         store: TaskRunStore,
         clock: TaskBudgetClock,
         defaultBudget: TaskBudget = TaskBudget(),
+        transformers: ChatMessageTransformers,
     ) : this(
         generate = { settings, model, messages, assistant, tools, maxSteps, processingStatus ->
             generationHandler.generateText(
@@ -128,6 +130,8 @@ class TaskCoordinator(
                 tools = tools,
                 maxSteps = maxSteps,
                 processingStatus = processingStatus,
+                inputTransformers = transformers.input,
+                outputTransformers = transformers.output,
             )
         },
         store = store,

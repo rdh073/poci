@@ -106,15 +106,7 @@ import me.rerere.rikkahub.service.automation.AutomationActivationTracker
 import me.rerere.rikkahub.service.automation.AutomationKillSwitch
 import me.rerere.rikkahub.service.automation.AutomationRuntimeRegistry
 import me.rerere.rikkahub.data.files.SkillManager
-import me.rerere.rikkahub.data.ai.transformers.Base64ImageToLocalFileTransformer
-import me.rerere.rikkahub.data.ai.transformers.KnowledgeContextTransformer
-import me.rerere.rikkahub.data.ai.transformers.OcrTransformer
-import me.rerere.rikkahub.data.ai.transformers.PlaceholderTransformer
-import me.rerere.rikkahub.data.ai.transformers.PromptInjectionTransformer
-import me.rerere.rikkahub.data.ai.transformers.RegexOutputTransformer
-import me.rerere.rikkahub.data.ai.transformers.TemplateTransformer
-import me.rerere.rikkahub.data.ai.transformers.ThinkTagTransformer
-import me.rerere.rikkahub.data.ai.transformers.TimeReminderTransformer
+import me.rerere.rikkahub.data.ai.transformers.ChatMessageTransformers
 import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
@@ -570,28 +562,6 @@ enum class ChatErrorSolution {
     CheckTitleModelSettings,
 }
 
-private val inputTransformers by lazy {
-    listOf(
-        TimeReminderTransformer,
-        PromptInjectionTransformer,
-        PlaceholderTransformer,
-        OcrTransformer,
-        // Single message-surface knowledge assembly point (issue #141): replaces both
-        // DocumentAsPromptTransformer and KnowledgeRetrievalTransformer. Placed AFTER OcrTransformer
-        // so RAG's query basis stays identical to today (post-OCR text); attachments are Document
-        // parts OcrTransformer ignores, so document injection is unaffected by the position.
-        KnowledgeContextTransformer,
-    )
-}
-
-private val outputTransformers by lazy {
-    listOf(
-        ThinkTagTransformer,
-        Base64ImageToLocalFileTransformer,
-        RegexOutputTransformer,
-    )
-}
-
 class ChatService(
     private val context: Application,
     private val appScope: AppScope,
@@ -601,7 +571,7 @@ class ChatService(
     private val memoryRecaller: MemoryRecaller,
     private val generationHandler: GenerationHandler,
     private val taskCoordinator: TaskCoordinator,
-    private val templateTransformer: TemplateTransformer,
+    private val chatMessageTransformers: ChatMessageTransformers,
     private val providerManager: ProviderManager,
     private val localTools: LocalTools,
     val mcpManager: McpManager,
@@ -1804,11 +1774,8 @@ class ChatService(
                 conversationModeInjectionIds = conversation.modeInjectionIds,
                 conversationLorebookIds = conversation.lorebookIds,
                 memories = recalledMemories,
-                inputTransformers = buildList {
-                    addAll(inputTransformers)
-                    add(templateTransformer)
-                },
-                outputTransformers = outputTransformers,
+                inputTransformers = chatMessageTransformers.input,
+                outputTransformers = chatMessageTransformers.output,
                 tools = appToolCatalog.tools(
                     ToolAssemblyContext(
                         mode = TurnMode.Main,
