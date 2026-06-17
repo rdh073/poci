@@ -79,6 +79,7 @@ import me.rerere.rikkahub.ui.components.nav.BackButton
 import me.rerere.rikkahub.ui.components.ui.FormItem
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.components.ui.RikkaConfirmDialog
+import me.rerere.rikkahub.ui.components.ui.SegmentedButtonLabel
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.ext.plus
 import me.rerere.rikkahub.ui.theme.CustomColors
@@ -565,7 +566,7 @@ private fun CreateScheduleDialog(
                                 selected = kind == candidate,
                                 onClick = { kind = candidate },
                             ) {
-                                Text(if (candidate == ScheduleKind.ONE_SHOT) "One-shot" else "Recurring")
+                                SegmentedButtonLabel(if (candidate == ScheduleKind.ONE_SHOT) "One-shot" else "Recurring")
                             }
                         }
                     }
@@ -586,7 +587,7 @@ private fun CreateScheduleDialog(
                                         every = maxOf(every, minEveryFor(candidate))
                                     },
                                 ) {
-                                    Text(candidate.name.lowercase())
+                                    SegmentedButtonLabel(candidate.name.lowercase())
                                 }
                             }
                         }

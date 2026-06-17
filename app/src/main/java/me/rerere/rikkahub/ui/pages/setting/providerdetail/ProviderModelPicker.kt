@@ -57,6 +57,7 @@ import me.rerere.rikkahub.R
 import me.rerere.rikkahub.ui.components.ai.ModelAbilityTag
 import me.rerere.rikkahub.ui.components.ai.ModelModalityTag
 import me.rerere.rikkahub.ui.components.ui.AutoAIIcon
+import me.rerere.rikkahub.ui.components.ui.SegmentedButtonLabel
 import me.rerere.rikkahub.ui.hooks.useEditState
 
 @Composable
@@ -412,7 +413,7 @@ internal fun ModelTypeSelector(
             SegmentedButton(
                 shape = SegmentedButtonDefaults.itemShape(index, ModelType.entries.size),
                 label = {
-                    Text(
+                    SegmentedButtonLabel(
                         text = stringResource(
                             when (type) {
                                 ModelType.CHAT -> R.string.setting_provider_page_chat_model
@@ -526,7 +527,7 @@ fun ModalAbilitySelector(
                     }
                 },
                 label = {
-                    Text(
+                    SegmentedButtonLabel(
                         text = stringResource(
                             when (ability) {
                                 ModelAbility.TOOL -> R.string.setting_provider_page_tool
