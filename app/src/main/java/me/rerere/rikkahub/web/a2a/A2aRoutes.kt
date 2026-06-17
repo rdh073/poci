@@ -922,7 +922,9 @@ private suspend fun readBoundedRequestBody(call: ApplicationCall): String {
         output.write(buffer, 0, read)
     }
 
-    return output.toString(Charsets.UTF_8)
+    // String(ByteArray, Charset) is available since API 1; ByteArrayOutputStream.toString(Charset)
+    // is API 33 (> minSdk 26) and trips the NewApi lint gate.
+    return String(output.toByteArray(), Charsets.UTF_8)
 }
 
 private class A2aCapacityExceededException(message: String) : RuntimeException(message)
