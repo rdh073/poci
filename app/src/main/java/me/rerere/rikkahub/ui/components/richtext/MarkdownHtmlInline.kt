@@ -179,6 +179,7 @@ internal fun AnnotatedString.Builder.appendHtmlInlineNode(
     style: TextStyle,
     enableLatexRendering: Boolean,
     onClickCitation: (String) -> Unit,
+    depth: Int = 0,
 ) {
     when (node) {
         is TextNode -> append(node.text())
@@ -190,6 +191,7 @@ internal fun AnnotatedString.Builder.appendHtmlInlineNode(
             style = style,
             enableLatexRendering = enableLatexRendering,
             onClickCitation = onClickCitation,
+            depth = depth,
         )
     }
 }
@@ -202,7 +204,13 @@ internal fun AnnotatedString.Builder.appendHtmlInlineElement(
     style: TextStyle,
     enableLatexRendering: Boolean,
     onClickCitation: (String) -> Unit,
+    depth: Int = 0,
 ) {
+    if (shouldStopHtmlDepthRecursion(depth)) {
+        append(element.text())
+        return
+    }
+
     val cssStyle = element.attr("style").takeIf { it.isNotBlank() }?.let {
         MarkdownCss.parseInlineSpanStyle(
             style = it,
@@ -220,6 +228,7 @@ internal fun AnnotatedString.Builder.appendHtmlInlineElement(
             style = inheritedStyle,
             enableLatexRendering = enableLatexRendering,
             onClickCitation = onClickCitation,
+            depth = depth + 1,
         )
     }
 
@@ -375,3 +384,5 @@ internal fun AnnotatedString.Builder.appendHtmlInlineElement(
         else -> appendElementChildren()
     }
 }
+
+internal fun shouldStopHtmlDepthRecursion(depth: Int): Boolean = depth >= RenderLimits.MAX_HTML_DEPTH

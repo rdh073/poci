@@ -774,26 +774,34 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
     val rowNodes = node.children.filter { it.type == GFMElementTypes.ROW }
 
     // 计算列数（从标题行获取）
-    val columnCount = headerNode?.children?.count { it.type == GFMTokenTypes.CELL } ?: 0
+    val rawColumnCount = headerNode?.children?.count { it.type == GFMTokenTypes.CELL } ?: 0
+    val (clampedRows, columnCount) = clampTableDimensions(rowNodes.size, rawColumnCount)
 
     // 检查是否有足够的列来显示表格
     if (columnCount == 0) return
 
     // 提取表头单元格文本
-    val headerCells =
-        headerNode?.children?.filter { it.type == GFMTokenTypes.CELL }?.map { it.getTextInNode(content).trim() }
-            ?: emptyList()
+    val headerCells = headerNode?.children
+        ?.filter { it.type == GFMTokenTypes.CELL }
+        ?.take(columnCount)
+        ?.map { it.getTextInNode(content).trim().take(RenderLimits.MAX_CELL_CHARS) } ?: emptyList()
 
     // 提取所有行的数据
-    val rows = rowNodes.map { rowNode ->
-        rowNode.children.filter { it.type == GFMTokenTypes.CELL }.map { it.getTextInNode(content).trim() }
+    val rows = rowNodes.take(clampedRows).map { rowNode ->
+        rowNode.children.filter { it.type == GFMTokenTypes.CELL }
+            .take(columnCount)
+            .map { it.getTextInNode(content).trim().take(RenderLimits.MAX_CELL_CHARS) }
     }
 
     // 创建表头composable列表
     val headers = List(columnCount) { columnIndex ->
         @Composable {
             MarkdownBlock(
-                content = if (columnIndex < headerCells.size) headerCells[columnIndex] else "",
+                content = if (columnIndex < headerCells.size) {
+                    headerCells[columnIndex].take(RenderLimits.MAX_CELL_CHARS)
+                } else {
+                    ""
+                },
             )
         }
     }
@@ -803,7 +811,11 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
         List(columnCount) { columnIndex ->
             @Composable {
                 MarkdownBlock(
-                    content = if (columnIndex < rowData.size) rowData[columnIndex] else "",
+                    content = if (columnIndex < rowData.size) {
+                        rowData[columnIndex].take(RenderLimits.MAX_CELL_CHARS)
+                    } else {
+                        ""
+                    },
                 )
             }
         }
@@ -898,6 +910,15 @@ private fun TableNode(node: ASTNode, content: String, modifier: Modifier = Modif
                 )
             }
         }
+        val truncatedRows = rowNodes.size - rows.size
+        if (truncatedRows > 0) {
+            Text(
+                text = "… table truncated (${truncatedRows} more rows)",
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            )
+        }
+
         DataTable(
             headers = headers,
             rows = rowComposables,
