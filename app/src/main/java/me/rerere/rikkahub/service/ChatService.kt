@@ -1818,9 +1818,8 @@ class ChatService(
                 // outer finally (covers the eager-arg throw before this onCompletion is even
                 // attached), not here. The lease itself is also self-expiring (TTL) as a backstop.
 
-                // Live Update 通知的移除由 GenerationForegroundService 在 1->0 边
-                // stopForeground(STOP_FOREGROUND_REMOVE) 唯一负责，这里不再 per-conversation 取消，
-                // 否则多会话并发时单个会话结束会误删其它会话仍在使用的共享常驻通知。
+                // Live Update 通知使用 per-conversation 的 (tag,id) 键，当前会话结束后即时移除，避免并发会话互相覆盖。
+                notificationSender.cancelLiveUpdate(conversationId)
 
                 // UI 末帧强制刷新由上游 coalesce 的 onCompletion 负责，已先于此处执行——下面读
                 // getConversationFlow().value 的定型保存与通知预览都已看到刷新后的精确最终状态。这里只负责与
@@ -1851,7 +1850,7 @@ class ChatService(
 
             }
         }.onFailure {
-            // Live Update 通知的移除由 GenerationForegroundService 在 1->0 边负责（见 onCompletion 注释）。
+            // Live Update 通知为 per-conversation 生命周期，已在 onCompletion 统一取消。
             if (it !is CancellationException) Log.e(TAG, "handleMessageComplete: generation failed", it)
             addError(it, conversationId, title = context.getString(R.string.error_title_generation))
             Logging.log(TAG, "handleMessageComplete: $it")
