@@ -146,10 +146,18 @@ fun SettingProviderPage(vm: SettingVM = koinViewModel()) {
                             )
                         )
                     }
-                    AddButton {
+                    AddButton { newProvider ->
                         vm.updateSettings(
                             settings.copy(
-                                providers = listOf(it) + settings.providers
+                                providers = listOf(newProvider) + settings.providers
+                            )
+                        )
+                        // Add & continue: jump straight into the new provider's Models tab so the
+                        // user fetches/picks models instead of hunting for the row they just made.
+                        navController.navigate(
+                            Screen.SettingProviderDetail(
+                                providerId = newProvider.id.toString(),
+                                initialTab = 1,
                             )
                         )
                     }
@@ -469,7 +477,7 @@ private fun AddButton(onAdd: (ProviderSetting) -> Unit) {
                     Text(stringResource(R.string.cancel))
                 }
                 TextButton(onClick = { dialogState.confirm() }) {
-                    Text(stringResource(R.string.setting_provider_page_add))
+                    Text("Add & continue")
                 }
             },
         ) {

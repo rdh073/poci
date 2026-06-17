@@ -452,7 +452,7 @@ class RouteActivity : ComponentActivity() {
 
                             entry<Screen.SettingProviderDetail> { key ->
                                 val id = Uuid.parse(key.providerId)
-                                SettingProviderDetailPage(id = id)
+                                SettingProviderDetailPage(id = id, initialTab = key.initialTab)
                             }
 
                             entry<Screen.SettingModels> {
@@ -689,7 +689,12 @@ sealed interface Screen : NavKey {
     data object SettingProvider : Screen
 
     @Serializable
-    data class SettingProviderDetail(val providerId: String) : Screen
+    data class SettingProviderDetail(
+        val providerId: String,
+        // Pager page to open on: 0 = Config, 1 = Models. "Add & continue" lands on Models so a
+        // freshly-added provider goes straight to fetching/picking its model catalog.
+        val initialTab: Int = 0,
+    ) : Screen
 
     @Serializable
     data object SettingModels : Screen
