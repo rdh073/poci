@@ -12,6 +12,8 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -2458,7 +2460,14 @@ class ChatService(
         return tombstonedConversations.containsKey(conversationId)
     }
 
-    suspend fun deleteConversation(conversation: Conversation) {
+    // Serializes delete vs restore so an Undo cannot interleave with an in-flight delete: History
+    // fires delete fire-and-forget and offers Undo immediately, and deleteConversation SUSPENDS (it
+    // joins the generation job before the repo delete). Without this lock, a restore in that window
+    // could clear the tombstone + re-insert and then the still-running delete would remove the
+    // restored row (or vice versa). The lock guarantees restore observes a fully-committed delete.
+    private val conversationDeleteRestoreMutex = Mutex()
+
+    suspend fun deleteConversation(conversation: Conversation) = conversationDeleteRestoreMutex.withLock {
         tombstonedConversations[conversation.id] = Unit
         stopGeneration(conversation.id)
         removeSession(conversation.id, force = true)
@@ -2466,11 +2475,13 @@ class ChatService(
     }
 
     /**
-     * Restore a previously-deleted conversation (History "Undo"). Clears the delete tombstone FIRST so
-     * the re-inserted row is savable again — otherwise [saveConversation] would keep no-op'ing for this
-     * id (the resurrection guard would treat a legitimate restore as a finalizer write).
+     * Restore a previously-deleted conversation (History "Undo"). Runs under the same mutex as
+     * [deleteConversation], so a restore that races an in-flight delete waits for the delete to fully
+     * commit first; it then clears the delete tombstone and re-inserts the row, so [saveConversation]
+     * stops no-op'ing for this id (the resurrection guard would otherwise treat the restore as a
+     * finalizer write).
      */
-    suspend fun restoreConversation(conversation: Conversation) {
+    suspend fun restoreConversation(conversation: Conversation) = conversationDeleteRestoreMutex.withLock {
         tombstonedConversations.remove(conversation.id)
         conversationRepo.insertConversation(conversation)
     }
