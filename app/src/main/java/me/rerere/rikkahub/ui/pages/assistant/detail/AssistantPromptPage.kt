@@ -473,6 +473,9 @@ private fun AssistantPromptContent(
                             modifier = Modifier.fillMaxWidth(),
                             maxLines = 6,
                             enableFullscreen = true,
+                            // List row: commit live so deleting this row can't be undone by a
+                            // dispose-time commit replaying a stale assistant copy that still has it.
+                            liveUpdate = true,
                         )
                     }
                 }
@@ -621,7 +624,9 @@ private fun AssistantRegexCard(
                         )
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.assistant_page_regex_name)) }
+                    label = { Text(stringResource(R.string.assistant_page_regex_name)) },
+                    // List row: commit live so a row delete can't be undone by a stale dispose commit.
+                    liveUpdate = true,
                 )
 
                 FormTextField(
@@ -644,6 +649,8 @@ private fun AssistantRegexCard(
                     label = { Text(stringResource(R.string.assistant_page_regex_find_regex)) },
                     placeholder = { Text("e.g., \\b\\w+@\\w+\\.\\w+\\b") },
                     enableFullscreen = true,
+                    // List row: commit live so a row delete can't be undone by a stale dispose commit.
+                    liveUpdate = true,
                 )
 
                 FormTextField(
@@ -666,6 +673,8 @@ private fun AssistantRegexCard(
                     label = { Text(stringResource(R.string.assistant_page_regex_replace_string)) },
                     placeholder = { Text("e.g., [EMAIL]") },
                     enableFullscreen = true,
+                    // List row: commit live so a row delete can't be undone by a stale dispose commit.
+                    liveUpdate = true,
                 )
 
                 Column {
