@@ -405,6 +405,13 @@ internal fun resolveDeferredShellCompletion(
     var foundAnchor = false
     val updatedNodes = conversation.messageNodes.map { node ->
         if (node.id != anchor.toolNodeId) return@map node
+        // Only auto-continue when the anchored tool lives in the node's CURRENTLY SELECTED branch.
+        // A deferred shell may sit in a branch alternative the user has since switched away from; we
+        // still resolve its output for history correctness, but generation reads currentMessages
+        // (the selected branch), so continuing on a completion from a non-selected branch would
+        // spuriously generate on the wrong branch.
+        val anchoredMessageIsSelected =
+            node.messages.getOrNull(node.selectIndex)?.id == anchor.toolMessageId
         val updatedMessages = node.messages.map { message ->
             if (message.id != anchor.toolMessageId) return@map message
             var matchedTool = false
@@ -414,7 +421,7 @@ internal fun resolveDeferredShellCompletion(
                 matchedTool = true
                 val currentText = (tool.output.singleOrNull() as? UIMessagePart.Text)?.text
                 if (tool.isDeferred) {
-                    shouldContinue = true
+                    shouldContinue = anchoredMessageIsSelected
                     tool.copy(output = listOf(UIMessagePart.Text(payloadJson))).asResolved()
                 } else if (currentText == payloadJson) {
                     tool.asResolved()
