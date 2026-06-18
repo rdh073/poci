@@ -143,6 +143,8 @@ fun TranslatorPage(vm: TranslatorVM = koinViewModel()) {
                     maxLines = 10,
                     textStyle = MaterialTheme.typography.headlineSmall,
                     enableFullscreen = true,
+                    // The Translate FAB reads the input synchronously, so commit on every edit.
+                    liveUpdate = true,
                 )
 
                 FilledTonalButton(

@@ -27,11 +27,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.unit.dp
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.FullScreen
@@ -61,6 +63,11 @@ fun FormTextField(
     readOnly: Boolean = false,
     scrollState: ScrollState = rememberScrollState(),
     enableFullscreen: Boolean = false,
+    // When true, the field also commits on every edit (not just on focus-loss/dispose). Use for fields
+    // whose value is read synchronously by an action button (e.g. an image-gen / translator prompt with
+    // a Send/Translate FAB) so the action never reads stale pre-blur text. Leave false for heavy
+    // settings/assistant pages where per-keystroke commits would recompose the whole page.
+    liveUpdate: Boolean = false,
 ) {
     key(externalKey) {
         val state = rememberTextFieldState(initialText = value)
@@ -92,6 +99,14 @@ fun FormTextField(
                 commitCurrentText()
             }
             wasFocused = focused
+        }
+
+        if (liveUpdate) {
+            LaunchedEffect(state) {
+                snapshotFlow { state.text.toString() }
+                    .distinctUntilChanged()
+                    .collect { commitCurrentText() }
+            }
         }
 
         DisposableEffect(state) {
