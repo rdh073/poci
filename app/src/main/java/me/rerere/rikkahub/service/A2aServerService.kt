@@ -115,7 +115,13 @@ class A2aServerService : Service() {
                     )
                 ) {
                     A2aServiceLifecycleAction.RUNNING -> {
+                        val firstRun = !wasRunning
                         wasRunning = true
+                        // Persist the enable flag only once the server is CONFIRMED running, so
+                        // app-open autostart never resurrects a start that actually failed. The
+                        // service is the single writer of a2aEnabled (success here, false on
+                        // failure/stop) — the UI does not write it optimistically.
+                        if (firstRun) settingsStore.update { it.copy(a2aEnabled = true) }
                         updateNotification(buildRunningNotification(state.url ?: "http://localhost:${state.port}"))
                     }
 

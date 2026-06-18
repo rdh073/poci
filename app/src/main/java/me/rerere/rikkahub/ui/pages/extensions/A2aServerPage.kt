@@ -97,6 +97,10 @@ fun A2aServerPage() {
 
     var pendingStart by remember { mutableStateOf(false) }
 
+    // The service is the SINGLE writer of a2aEnabled: it persists true only once the server is
+    // confirmed running and false on a failed start or stop. The page must NOT optimistically write
+    // a2aEnabled=true here — that raced the service's failure-disable and could leave a doomed
+    // autostart persisted across launches.
     fun startA2aServer() {
         val intent = Intent(context, A2aServerService::class.java).apply {
             action = A2aServerService.ACTION_START
@@ -104,9 +108,6 @@ fun A2aServerPage() {
             putExtra(A2aServerService.EXTRA_LOCALHOST_ONLY, settings.a2aServerLocalhostOnly)
         }
         context.startForegroundService(intent)
-        scope.launch {
-            settingsStore.update { it.copy(a2aEnabled = true) }
-        }
     }
 
     fun stopA2aServer() {
@@ -114,9 +115,6 @@ fun A2aServerPage() {
             action = A2aServerService.ACTION_STOP
         }
         context.startService(intent)
-        scope.launch {
-            settingsStore.update { it.copy(a2aEnabled = false) }
-        }
     }
 
     LaunchedEffect(permissionState.allPermissionsGranted) {
