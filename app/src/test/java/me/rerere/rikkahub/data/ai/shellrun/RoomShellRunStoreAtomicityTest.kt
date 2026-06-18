@@ -63,6 +63,16 @@ class RoomShellRunStoreAtomicityTest {
             consumedAt: Long,
         ) = delegate.markConsumed(id, syntheticNodeId, syntheticMessageId, consumedAt)
 
+        override suspend fun markCancelled(
+            id: String,
+            cancelledAt: Long,
+        ) = delegate.markCancelled(id, cancelledAt)
+
+        override suspend fun markFailed(
+            id: String,
+            cancelledAt: Long,
+        ) = delegate.markFailed(id, cancelledAt)
+
         override suspend fun nextEnqueueSeq(conversationId: String): Long = delegate.nextEnqueueSeq(conversationId)
 
         override suspend fun deleteByConversationId(conversationId: String): Int =

@@ -39,6 +39,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.Json
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.core.ReasoningLevel
 import me.rerere.ai.core.Tool
@@ -84,6 +85,9 @@ import me.rerere.ai.runtime.contract.TurnMode
 import me.rerere.rikkahub.data.ai.agentevent.AgentEventQueueReducer
 import me.rerere.rikkahub.data.ai.agentevent.AgentEventStore
 import me.rerere.rikkahub.data.ai.agentevent.ClaimOutcome
+import me.rerere.rikkahub.data.ai.agentevent.ClaimAppendAction
+import me.rerere.rikkahub.data.db.entity.AgentEventEntity
+import me.rerere.rikkahub.data.ai.agentevent.AgentEventTerminalStatus
 import me.rerere.rikkahub.data.ai.agentevent.SyntheticAppendResult
 import me.rerere.rikkahub.data.ai.agentevent.TurnGateState
 import me.rerere.rikkahub.data.ai.runtime.AppToolCatalog
@@ -126,6 +130,7 @@ import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.Assistant
 import me.rerere.rikkahub.data.model.MessageNode
 import me.rerere.rikkahub.data.model.SYNTHETIC_KIND_METADATA_KEY
+import me.rerere.rikkahub.data.model.syntheticAgentEventMarker
 import me.rerere.rikkahub.data.model.AssistantAffectScope
 import me.rerere.rikkahub.data.model.AutomationGrant
 import me.rerere.rikkahub.data.model.SHELL_BACKGROUNDED_MARKER
@@ -673,6 +678,7 @@ class ChatService(
     // 统一会话管理
     private val sessions = ConcurrentHashMap<Uuid, ConversationSession>()
     private val _sessionsVersion = MutableStateFlow(0L)
+    private val tombstonedConversations = ConcurrentHashMap<Uuid, Unit>()
 
     // In-flight forwarded CHILD approvals (SPEC.md M4 / Gap A), keyed taskId/childToolCallId.
     // The waiter suspends inside the live generation; handleToolApproval resolves it IN PLACE —
@@ -795,9 +801,9 @@ class ChatService(
         }
     }
 
-    private fun removeSession(conversationId: Uuid) {
+    private fun removeSession(conversationId: Uuid, force: Boolean = false) {
         val session = sessions[conversationId] ?: return
-        if (session.isInUse) {
+        if (!force && session.isInUse) {
             Log.d(TAG, "removeSession: skipped $conversationId (still in use)")
             return
         }
@@ -1161,7 +1167,7 @@ class ChatService(
 
     /**
      * Drain ONE pending agent-event at a turn-end seam (issue #290). Claims the oldest PENDING event,
-     * appends its visible synthetic [MessageRole.USER] message (carrying the SYNTHETIC_DISTINCTNESS
+     * appends its visible synthetic [MessageRole.ASSISTANT] message (carrying the SYNTHETIC_DISTINCTNESS
      * part metadata so later FTS/stats/sanitizer filters have a stable hook), and marks it CONSUMED —
      * all in ONE store transaction, so a second drain or a startup replay racing the same row is a
      * no-op (AT_MOST_ONCE). Then continues the model via [handleMessageComplete] with
@@ -1178,39 +1184,103 @@ class ChatService(
         if (lastMessage?.parts?.any { it is UIMessagePart.Tool && it.isPending } == true) return
 
         val outcome = agentEventStore.claimAndAppendAndConsume(conversationId) { event ->
-            val syntheticMessage = UIMessage(
-                role = MessageRole.USER,
-                parts = listOf(
-                    UIMessagePart.Text(
-                        text = event.payloadJson,
-                        metadata = buildJsonObject {
-                            put(SYNTHETIC_KIND_METADATA_KEY, AGENT_EVENT_SYNTHETIC_KIND)
-                            put(AGENT_EVENT_ID_METADATA_KEY, event.id)
-                            put(AGENT_EVENT_KIND_METADATA_KEY, event.kind)
-                        },
-                    )
+            val persistedConversation = conversationRepo.getConversationById(conversationId)
+            if (isConversationTombstoned(conversationId) || persistedConversation == null) {
+                return@claimAndAppendAndConsume ClaimAppendAction.Terminalize(
+                    AgentEventTerminalStatus.CANCELLED,
+                )
+            }
+
+            if (runCatching { Json.parseToJsonElement(event.payloadJson) }.isFailure) {
+                return@claimAndAppendAndConsume ClaimAppendAction.Terminalize(
+                    AgentEventTerminalStatus.FAILED,
+                )
+            }
+
+            val alreadyVisible = findSyntheticNodeAndMessageIds(persistedConversation, event)
+            if (alreadyVisible != null) {
+                val (nodeId, messageId) = alreadyVisible
+                return@claimAndAppendAndConsume ClaimAppendAction.Append(
+                    synthetic = SyntheticAppendResult(
+                        syntheticNodeId = nodeId.toString(),
+                        syntheticMessageId = messageId.toString(),
+                    ),
+                    continueGeneration = false,
+                )
+            }
+
+            val syntheticMessage = buildSyntheticAgentEventMessage(event)
+            val syntheticNode = syntheticMessage.toMessageNode()
+            conversationRepo.appendMessageNode(
+                persistedConversation.copy(messageNodes = persistedConversation.messageNodes + syntheticNode),
+                syntheticNode,
+            )
+            ClaimAppendAction.Append(
+                synthetic = SyntheticAppendResult(
+                    syntheticNodeId = syntheticNode.id.toString(),
+                    syntheticMessageId = syntheticMessage.id.toString(),
                 ),
-            )
-            val node = syntheticMessage.toMessageNode()
-            saveConversation(
-                conversationId,
-                getConversationFlow(conversationId).value.let { current ->
-                    current.copy(messageNodes = current.messageNodes + node)
-                },
-            )
-            SyntheticAppendResult(
-                syntheticNodeId = node.id.toString(),
-                syntheticMessageId = syntheticMessage.id.toString(),
             )
         }
 
         if (outcome is ClaimOutcome.Delivered) {
+            refreshSessionAndFts(conversationId)
             // Continue the model on the just-appended synthetic message. runTurnEndJobs = false: the
             // continuation does not own the turn-end-job launch here, and — crucially — does not
             // recurse into another drain (one event per continuation, productDecision #5).
-            handleMessageComplete(conversationId, runTurnEndJobs = false)
+            if (outcome.continueGeneration) {
+                handleMessageComplete(conversationId, runTurnEndJobs = false)
+            }
         }
     }
+
+    private suspend fun refreshSessionAndFts(conversationId: Uuid) {
+        val persistedConversation = conversationRepo.getConversationById(conversationId) ?: return
+        updateConversationStateOnly(conversationId, persistedConversation)
+        conversationRepo.indexConversationById(conversationId)
+    }
+
+    private fun findSyntheticNodeAndMessageIds(
+        conversation: Conversation,
+        event: AgentEventEntity,
+    ): Pair<Uuid, Uuid>? =
+        conversation.messageNodes
+            .asSequence()
+            .flatMap { node ->
+                node.messages
+                    .asSequence()
+                    .mapNotNull { message ->
+                        val marker = message.syntheticAgentEventMarker()
+                        if (marker?.first == event.kind && marker.second == event.id) {
+                            node.id to message.id
+                        } else {
+                            null
+                        }
+                    }
+            }
+            .firstOrNull()
+
+    private fun buildSyntheticAgentEventMessage(event: AgentEventEntity): UIMessage =
+        UIMessage(
+            role = MessageRole.ASSISTANT,
+            parts = listOf(
+            UIMessagePart.Tool(
+                toolCallId = event.id,
+                toolName = event.kind,
+                input = "",
+                metadata = buildJsonObject {
+                    put(SYNTHETIC_KIND_METADATA_KEY, AGENT_EVENT_SYNTHETIC_KIND)
+                    put(AGENT_EVENT_ID_METADATA_KEY, event.id)
+                    put(AGENT_EVENT_KIND_METADATA_KEY, event.kind)
+                },
+                output = listOf(
+                    UIMessagePart.Text(
+                        text = event.payloadJson,
+                    )
+                ),
+            ),
+        ),
+    )
 
     // 自动压缩历史的触发与执行（design #193 Stage 1：token 触发器 + 熔断器）。
     //
@@ -2353,6 +2423,8 @@ class ChatService(
     }
 
     suspend fun saveConversation(conversationId: Uuid, conversation: Conversation) {
+        if (isConversationTombstoned(conversation.id)) return
+
         val exists = conversationRepo.existsConversationById(conversation.id)
         if (!exists && conversation.title.isBlank() && conversation.messageNodes.isEmpty()) {
             return // 新会话且为空时不保存
@@ -2365,6 +2437,17 @@ class ChatService(
         } else {
             conversationRepo.updateConversation(conversation)
         }
+    }
+
+    private fun isConversationTombstoned(conversationId: Uuid): Boolean {
+        return tombstonedConversations.containsKey(conversationId)
+    }
+
+    suspend fun deleteConversation(conversation: Conversation) {
+        tombstonedConversations[conversation.id] = Unit
+        stopGeneration(conversation.id)
+        removeSession(conversation.id, force = true)
+        conversationRepo.deleteConversation(conversation)
     }
 
     // ---- 翻译消息 ----

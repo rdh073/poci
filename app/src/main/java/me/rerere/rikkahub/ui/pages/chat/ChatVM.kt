@@ -289,7 +289,7 @@ class ChatVM(
 
     fun deleteConversation(conversation: Conversation) {
         launchVm(onError = { reportOperationError(it) }) {
-            conversationRepo.deleteConversation(conversation)
+            chatService.deleteConversation(conversation)
         }
     }
 
