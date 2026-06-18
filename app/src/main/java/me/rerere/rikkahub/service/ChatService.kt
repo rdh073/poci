@@ -168,6 +168,12 @@ import kotlin.uuid.Uuid
 
 private const val TAG = "ChatService"
 
+private const val SYNTHETIC_TOOL_NAME_MAX_LENGTH = 64
+private val SYNTHETIC_TOOL_NAME_INVALID_CHARS = Regex("[^a-zA-Z0-9_-]")
+
+internal fun sanitizeSyntheticToolName(kind: String): String =
+    SYNTHETIC_TOOL_NAME_INVALID_CHARS.replace(kind, "_").take(SYNTHETIC_TOOL_NAME_MAX_LENGTH)
+
 // Turn-end sequencing for the sendMessage path (review mustFix #2). The invariant it pins: the
 // Stop-hook continuation strictly precedes ONE turn-end job launch, so title/suggestion jobs are
 // always built from the final transcript and never race a continued turn; a failed completion
@@ -1266,7 +1272,7 @@ class ChatService(
             parts = listOf(
             UIMessagePart.Tool(
                 toolCallId = event.id,
-                toolName = event.kind,
+                toolName = sanitizeSyntheticToolName(event.kind),
                 input = "",
                 metadata = buildJsonObject {
                     put(SYNTHETIC_KIND_METADATA_KEY, AGENT_EVENT_SYNTHETIC_KIND)

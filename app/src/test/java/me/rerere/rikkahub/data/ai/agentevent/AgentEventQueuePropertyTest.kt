@@ -7,6 +7,7 @@ import io.kotest.property.checkAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import me.rerere.rikkahub.data.db.dao.AgentEventDAO
 import me.rerere.rikkahub.data.db.entity.AgentEventStatus
 import me.rerere.rikkahub.data.repository.BoardTransactionRunner
 import me.rerere.rikkahub.data.repository.fakes.FakeAgentEventDAO
@@ -64,7 +65,6 @@ class AgentEventQueuePropertyTest {
         suspend fun drainOnce(): Boolean {
             if (!AgentEventQueueReducer.canDrain(turnState)) return false
             val outcome = store.claimAndAppendAndConsume(conversationId) { event ->
-                appendedMessages[event.id] = event.payloadJson
                 ClaimAppendAction.Append(
                     synthetic = SyntheticAppendResult(
                         syntheticNodeId = "node-${event.id}",
@@ -73,6 +73,7 @@ class AgentEventQueuePropertyTest {
                 )
             }
             return if (outcome is ClaimOutcome.Delivered) {
+                appendedMessages[outcome.event.id] = outcome.event.payloadJson
                 deliveryLog += outcome.event.id
                 true
             } else {
@@ -84,6 +85,17 @@ class AgentEventQueuePropertyTest {
         suspend fun drainAll() {
             while (drainOnce()) { /* claim until empty */ }
         }
+    }
+
+    private class LostConsumeAgentEventDAO(
+        private val delegate: FakeAgentEventDAO = FakeAgentEventDAO(),
+    ) : AgentEventDAO by delegate {
+        override suspend fun markConsumed(
+            id: String,
+            syntheticNodeId: String,
+            syntheticMessageId: String,
+            consumedAt: Long,
+        ): Int = 0
     }
 
     // --- 1. AT_MOST_ONCE (Boundary) -----------------------------------------------------------
@@ -107,6 +119,36 @@ class AgentEventQueuePropertyTest {
             )
             assertEquals("every enqueued event delivered exactly once", eventCount, model.deliveryLog.size)
         }
+    }
+
+    // --- 1b. LOST_CONSUME_ROLLBACK ----------------------------------------------------------
+    // If the conditional CONSUME update is raced and wins 0 rows, the store must return Lost and
+    // persist no consumed marker, so there is no committed synthetic append for that event.
+    @Test
+    fun `lost consume leaves no synthetic append markers`(): Unit = runBlocking {
+        val dao = LostConsumeAgentEventDAO()
+        val store = RoomAgentEventStore(dao = dao, transactions = FakeTransactions(), now = { 1L })
+        val conversationId = Uuid.random()
+
+        store.enqueue(conversationId, "shell", "{\"done\":true}", "lost")
+        val pending = dao.listPending(conversationId.toString())
+        require(pending.size == 1)
+        val eventId = pending.single().id
+
+        val outcome = store.claimAndAppendAndConsume(conversationId) { event ->
+            ClaimAppendAction.Append(
+                synthetic = SyntheticAppendResult(
+                    syntheticNodeId = "node-${event.id}",
+                    syntheticMessageId = "msg-${event.id}",
+                ),
+            )
+        }
+
+        assertTrue("a row that loses claim must return Lost", outcome is ClaimOutcome.Lost)
+        val row = requireNotNull(dao.getById(eventId))
+        assertEquals("pending event must stay consumable", AgentEventStatus.PENDING.name, row.status)
+        assertEquals("orphan append should not be recorded", null, row.syntheticNodeId)
+        assertEquals("orphan append should not be recorded", null, row.syntheticMessageId)
     }
 
     // --- 2. NO_DOUBLE_GENERATION / IDLE_GATING (Invariant) -------------------------------------
