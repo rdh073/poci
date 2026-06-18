@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -43,7 +44,12 @@ class HistoryVM(
     fun deleteAllConversations() {
         val assistant = assistant.value ?: return
         viewModelScope.launch {
-            conversationRepo.deleteConversationOfAssistant(assistant.id)
+            // Route each delete through ChatService so it is tombstoned + its live generation job
+            // cancelled before the DB delete; the repo bulk delete bypasses that and a finalizer can
+            // resurrect an in-flight conversation.
+            conversationRepo.getConversationsOfAssistant(assistant.id).first().forEach { conversation ->
+                chatService.deleteConversation(conversation)
+            }
         }
     }
 

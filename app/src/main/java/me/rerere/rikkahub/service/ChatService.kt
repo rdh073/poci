@@ -169,10 +169,15 @@ import kotlin.uuid.Uuid
 private const val TAG = "ChatService"
 
 private const val SYNTHETIC_TOOL_NAME_MAX_LENGTH = 64
+private const val SYNTHETIC_TOOL_NAME_FALLBACK = "agent_event"
 private val SYNTHETIC_TOOL_NAME_INVALID_CHARS = Regex("[^a-zA-Z0-9_-]")
 
+// Total over any kind: a kind that is empty or all-invalid (sanitizes to "") would violate the
+// provider tool-name contract ^[a-zA-Z0-9_-]{1,64}$ (min length 1), so fall back to a valid default.
 internal fun sanitizeSyntheticToolName(kind: String): String =
-    SYNTHETIC_TOOL_NAME_INVALID_CHARS.replace(kind, "_").take(SYNTHETIC_TOOL_NAME_MAX_LENGTH)
+    SYNTHETIC_TOOL_NAME_INVALID_CHARS.replace(kind, "_")
+        .take(SYNTHETIC_TOOL_NAME_MAX_LENGTH)
+        .ifEmpty { SYNTHETIC_TOOL_NAME_FALLBACK }
 
 // Turn-end sequencing for the sendMessage path (review mustFix #2). The invariant it pins: the
 // Stop-hook continuation strictly precedes ONE turn-end job launch, so title/suggestion jobs are

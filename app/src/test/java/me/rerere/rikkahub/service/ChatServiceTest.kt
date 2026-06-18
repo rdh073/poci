@@ -42,5 +42,9 @@ class ChatServiceTest {
             64,
             sanitizeSyntheticToolName("x".repeat(120)).length,
         )
+        // Total over the edge cases: an empty or all-invalid kind sanitizes to "" which would violate
+        // the min-length-1 contract, so it must fall back to a valid non-empty name.
+        assertTrue("empty kind must yield a provider-safe name", regex.matches(sanitizeSyntheticToolName("")))
+        assertTrue("all-invalid kind must yield a provider-safe name", regex.matches(sanitizeSyntheticToolName("...")))
     }
 }
