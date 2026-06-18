@@ -2477,13 +2477,18 @@ class ChatService(
     /**
      * Restore a previously-deleted conversation (History "Undo"). Runs under the same mutex as
      * [deleteConversation], so a restore that races an in-flight delete waits for the delete to fully
-     * commit first; it then clears the delete tombstone and re-inserts the row, so [saveConversation]
-     * stops no-op'ing for this id (the resurrection guard would otherwise treat the restore as a
-     * finalizer write).
+     * commit first.
+     *
+     * Invariant: the tombstone is cleared ONLY AFTER the restored row is durably re-inserted. Order
+     * matters — insert first, then clear. While the insert is in flight the id is still tombstoned, so
+     * a stale app-scope save (e.g. a post-turn suggestion job holding pre-delete state) is blocked by
+     * [saveConversation]'s guard instead of racing in an insert; once the tombstone is cleared the row
+     * already exists, so any later save takes the update path and can never resurrect via insert. This
+     * removes the save/restore window without dragging the hot-path [saveConversation] under the mutex.
      */
     suspend fun restoreConversation(conversation: Conversation) = conversationDeleteRestoreMutex.withLock {
-        tombstonedConversations.remove(conversation.id)
         conversationRepo.insertConversation(conversation)
+        tombstonedConversations.remove(conversation.id)
     }
 
     // ---- 翻译消息 ----
