@@ -100,6 +100,7 @@ internal fun ImageGenInputBar(
             maxLines = 5,
             shape = MaterialTheme.shapes.large,
             textStyle = MaterialTheme.typography.bodySmall,
+            enableFullscreen = true,
         )
 
         Row(

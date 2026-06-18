@@ -142,6 +142,7 @@ fun TranslatorPage(vm: TranslatorVM = koinViewModel()) {
                     ),
                     maxLines = 10,
                     textStyle = MaterialTheme.typography.headlineSmall,
+                    enableFullscreen = true,
                 )
 
                 FilledTonalButton(

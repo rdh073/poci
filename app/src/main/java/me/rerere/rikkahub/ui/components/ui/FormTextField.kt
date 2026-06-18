@@ -1,5 +1,8 @@
 package me.rerere.rikkahub.ui.components.ui
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -9,11 +12,14 @@ import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -21,11 +27,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
-import kotlinx.coroutines.flow.distinctUntilChanged
+import androidx.compose.ui.unit.dp
+import me.rerere.hugeicons.HugeIcons
+import me.rerere.hugeicons.stroke.FullScreen
+import me.rerere.rikkahub.R
 
 @Composable
 fun FormTextField(
@@ -50,12 +60,14 @@ fun FormTextField(
     enabled: Boolean = true,
     readOnly: Boolean = false,
     scrollState: ScrollState = rememberScrollState(),
+    enableFullscreen: Boolean = false,
 ) {
     key(externalKey) {
         val state = rememberTextFieldState(initialText = value)
         val latestOnValueChange by rememberUpdatedState(onValueChange)
         val interactionSource = remember { MutableInteractionSource() }
         val focused by interactionSource.collectIsFocusedAsState()
+        var fullscreenOpen by remember { mutableStateOf(false) }
         // `lastEmitted` is the last text this field is responsible for (the seed, or a value it
         // emitted/adopted). `awaitingAck` means we have emitted a user edit the external source has
         // not echoed back yet — while it is set, EVERY incoming external value is a stale in-flight
@@ -64,20 +76,28 @@ fun FormTextField(
         // from a real reset apart; the ack flag can.
         var lastEmitted by remember { mutableStateOf(value) }
         var awaitingAck by remember { mutableStateOf(false) }
+        var wasFocused by remember { mutableStateOf(false) }
 
-        LaunchedEffect(state) {
-            snapshotFlow { state.text.toString() }
-                .distinctUntilChanged()
-                .collect { text ->
-                    // Only a genuine USER edit differs from what we last seeded/emitted/adopted, so
-                    // the seed emission and the programmatic adopt-write never echo back out (no
-                    // write-back loop, no spurious initial write through trim/parse call sites).
-                    if (text != lastEmitted) {
-                        lastEmitted = text
-                        awaitingAck = true
-                        latestOnValueChange(text)
-                    }
-                }
+        fun commitCurrentText() {
+            val text = state.text.toString()
+            if (shouldCommitFormTextField(text, lastEmitted)) {
+                lastEmitted = text
+                awaitingAck = true
+                latestOnValueChange(text)
+            }
+        }
+
+        LaunchedEffect(focused) {
+            if (wasFocused && !focused) {
+                commitCurrentText()
+            }
+            wasFocused = focused
+        }
+
+        DisposableEffect(state) {
+            onDispose {
+                commitCurrentText()
+            }
         }
 
         LaunchedEffect(value, focused, state) {
@@ -99,6 +119,38 @@ fun FormTextField(
             }
         }
 
+        val fullscreenIcon: (@Composable () -> Unit)? = if (enableFullscreen) {
+            {
+                IconButton(
+                    onClick = { fullscreenOpen = true },
+                    enabled = enabled && !readOnly,
+                ) {
+                    Icon(
+                        imageVector = HugeIcons.FullScreen,
+                        contentDescription = stringResource(R.string.text_area_fullscreen_edit),
+                        modifier = Modifier.size(24.dp),
+                    )
+                }
+            }
+        } else {
+            null
+        }
+        val effectiveTrailingIcon: (@Composable () -> Unit)? = when {
+            trailingIcon != null && fullscreenIcon != null -> {
+                {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        trailingIcon()
+                        fullscreenIcon()
+                    }
+                }
+            }
+            fullscreenIcon != null -> fullscreenIcon
+            else -> trailingIcon
+        }
+
         OutlinedTextField(
             state = state,
             modifier = modifier,
@@ -110,7 +162,7 @@ fun FormTextField(
             },
             placeholder = placeholder,
             leadingIcon = leadingIcon,
-            trailingIcon = trailingIcon,
+            trailingIcon = effectiveTrailingIcon,
             supportingText = supportingText,
             isError = isError,
             outputTransformation = outputTransformation,
@@ -128,6 +180,16 @@ fun FormTextField(
             colors = colors,
             interactionSource = interactionSource,
         )
+
+        if (fullscreenOpen) {
+            FullScreenTextEditor(
+                state = state,
+                label = "",
+                placeholder = "",
+                onDismiss = { fullscreenOpen = false },
+                onSave = { commitCurrentText() },
+            )
+        }
     }
 }
 
@@ -163,6 +225,11 @@ internal fun reconcileFormTextField(
     !focused -> FormTextFieldReconciliation.AdoptExternal
     else -> FormTextFieldReconciliation.KeepLocal
 }
+
+internal fun shouldCommitFormTextField(
+    localText: String,
+    lastEmitted: String,
+): Boolean = localText != lastEmitted
 
 internal data class FormTextFieldBufferSnapshot(
     val externalKey: Any,
