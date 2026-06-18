@@ -56,31 +56,45 @@ fun FormTextField(
         val latestOnValueChange by rememberUpdatedState(onValueChange)
         val interactionSource = remember { MutableInteractionSource() }
         val focused by interactionSource.collectIsFocusedAsState()
-        var syncedExternalValue by remember { mutableStateOf(value) }
+        // `lastEmitted` is the last text this field is responsible for (the seed, or a value it
+        // emitted/adopted). `awaitingAck` means we have emitted a user edit the external source has
+        // not echoed back yet — while it is set, EVERY incoming external value is a stale in-flight
+        // echo and must not touch the editor (this is what prevents the cursor jump and the
+        // blur-before-echo clobber). A value-only "adopt when different" cannot tell a stale echo
+        // from a real reset apart; the ack flag can.
+        var lastEmitted by remember { mutableStateOf(value) }
+        var awaitingAck by remember { mutableStateOf(false) }
 
         LaunchedEffect(state) {
             snapshotFlow { state.text.toString() }
                 .distinctUntilChanged()
-                .collect { latestOnValueChange(it) }
+                .collect { text ->
+                    // Only a genuine USER edit differs from what we last seeded/emitted/adopted, so
+                    // the seed emission and the programmatic adopt-write never echo back out (no
+                    // write-back loop, no spurious initial write through trim/parse call sites).
+                    if (text != lastEmitted) {
+                        lastEmitted = text
+                        awaitingAck = true
+                        latestOnValueChange(text)
+                    }
+                }
         }
 
         LaunchedEffect(value, focused, state) {
             when (
-                val reconciliation = reconcileFormTextField(
+                reconcileFormTextField(
                     localText = state.text.toString(),
                     incomingExternalValue = value,
-                    syncedExternalValue = syncedExternalValue,
+                    awaitingAck = awaitingAck,
                     focused = focused,
                 )
             ) {
-                is FormTextFieldReconciliation.AdoptExternal -> {
-                    state.setTextAndPlaceCursorAtEnd(reconciliation.value)
-                    syncedExternalValue = reconciliation.value
-                }
-
+                FormTextFieldReconciliation.Ack -> awaitingAck = false
                 FormTextFieldReconciliation.KeepLocal -> Unit
-                is FormTextFieldReconciliation.MarkClean -> {
-                    syncedExternalValue = reconciliation.value
+                is FormTextFieldReconciliation.AdoptExternal -> {
+                    state.setTextAndPlaceCursorAtEnd(value)
+                    lastEmitted = value
+                    awaitingAck = false
                 }
             }
         }
@@ -118,29 +132,36 @@ fun FormTextField(
 }
 
 internal sealed interface FormTextFieldReconciliation {
+    /** External caught up to the local buffer: clear the pending-ack flag, do NOT rewrite the editor. */
+    data object Ack : FormTextFieldReconciliation
+    /** Stale in-flight echo, or an external change while the user is editing: leave the buffer alone. */
     data object KeepLocal : FormTextFieldReconciliation
-    data class AdoptExternal(val value: String) : FormTextFieldReconciliation
-    data class MarkClean(val value: String) : FormTextFieldReconciliation
+    /** A genuine external change (e.g. a reset button) on an idle, in-sync field: adopt it. */
+    data object AdoptExternal : FormTextFieldReconciliation
 }
 
+/**
+ * Pure decision for how an incoming external [incomingExternalValue] should affect the editor.
+ *
+ * - If it equals the local text, the external source has acknowledged our edit -> [Ack].
+ * - While [awaitingAck] (we have an un-echoed local edit), ANY non-matching external value is a stale
+ *   in-flight echo and must be ignored -> [KeepLocal]. This is the property that kills the cursor
+ *   jump: a value-only "adopt when different" cannot distinguish a stale echo from a real reset, so it
+ *   would clobber freshly typed text on blur before the echo lands; the ack flag can.
+ * - Once in sync and the field is idle (not [focused]), a differing external value is a real change
+ *   (reset / another control) -> [AdoptExternal].
+ * - In sync but focused: a non-matching external change mid-focus is left alone -> [KeepLocal].
+ */
 internal fun reconcileFormTextField(
     localText: String,
     incomingExternalValue: String,
-    syncedExternalValue: String,
+    awaitingAck: Boolean,
     focused: Boolean,
-): FormTextFieldReconciliation {
-    if (incomingExternalValue == localText) {
-        return FormTextFieldReconciliation.MarkClean(incomingExternalValue)
-    }
-
-    val dirty = localText != syncedExternalValue
-    if (!focused && !dirty) {
-        return FormTextFieldReconciliation.AdoptExternal(incomingExternalValue)
-    }
-
-    // A stale async echo of the user's own edit is different from localText while the field is dirty,
-    // so it can only land here. That echo is never written back into the editor buffer.
-    return FormTextFieldReconciliation.KeepLocal
+): FormTextFieldReconciliation = when {
+    incomingExternalValue == localText -> FormTextFieldReconciliation.Ack
+    awaitingAck -> FormTextFieldReconciliation.KeepLocal
+    !focused -> FormTextFieldReconciliation.AdoptExternal
+    else -> FormTextFieldReconciliation.KeepLocal
 }
 
 internal data class FormTextFieldBufferSnapshot(
