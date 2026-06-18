@@ -106,16 +106,34 @@ class A2aServerService : Service() {
         stateObserverJob = serviceScope.launch {
             var wasRunning = false
             a2aServerManager.state.collect { state ->
-                when {
-                    state.isRunning -> {
+                when (
+                    a2aServiceLifecycleAction(
+                        wasRunning = wasRunning,
+                        isRunning = state.isRunning,
+                        isLoading = state.isLoading,
+                        hasError = state.error != null,
+                    )
+                ) {
+                    A2aServiceLifecycleAction.RUNNING -> {
                         wasRunning = true
                         updateNotification(buildRunningNotification(state.url ?: "http://localhost:${state.port}"))
                     }
 
-                    wasRunning && !state.isRunning && !state.isLoading -> {
+                    // Start failed before ever running (e.g. port conflict / port in use): tear the
+                    // foreground service down AND clear the persisted enable flag, otherwise the
+                    // service stays foreground forever and app-open autostart retries every launch.
+                    A2aServiceLifecycleAction.STOP_AND_DISABLE -> {
+                        settingsStore.update { it.copy(a2aEnabled = false) }
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
                     }
+
+                    A2aServiceLifecycleAction.STOP -> {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
+
+                    A2aServiceLifecycleAction.NONE -> Unit
                 }
             }
         }
@@ -164,4 +182,27 @@ class A2aServerService : Service() {
             .addAction(0, "Stop", stopPendingIntent)
             .build()
     }
+}
+
+/** What the foreground service should do for an observed [A2aServerManager] state. */
+internal enum class A2aServiceLifecycleAction { NONE, RUNNING, STOP, STOP_AND_DISABLE }
+
+/**
+ * Pure lifecycle decision for the A2A foreground service. Extracted so the terminal-state handling
+ * is unit-testable: a start that fails BEFORE ever running (error, not loading, never was running)
+ * must STOP_AND_DISABLE — tear the service down AND clear the persisted enable flag — otherwise the
+ * service is stuck foreground and app-open autostart keeps retrying. A stop AFTER a successful run is
+ * a plain STOP (the enable flag is the user's choice, left untouched here).
+ */
+internal fun a2aServiceLifecycleAction(
+    wasRunning: Boolean,
+    isRunning: Boolean,
+    isLoading: Boolean,
+    hasError: Boolean,
+): A2aServiceLifecycleAction = when {
+    isRunning -> A2aServiceLifecycleAction.RUNNING
+    isLoading -> A2aServiceLifecycleAction.NONE
+    !wasRunning && hasError -> A2aServiceLifecycleAction.STOP_AND_DISABLE
+    wasRunning -> A2aServiceLifecycleAction.STOP
+    else -> A2aServiceLifecycleAction.NONE
 }
