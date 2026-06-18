@@ -2434,15 +2434,13 @@ class ChatService(
     }
 
     suspend fun saveConversation(conversationId: Uuid, conversation: Conversation) {
+        // A tombstoned id never saves here: during delete the row still EXISTS until the repo delete
+        // commits, so an in-flight finalizer (generation onCompletion, title/suggestion job) must be
+        // blocked unconditionally — keying off row-existence would race the delete and resurrect the
+        // chat. The tombstone is cleared ONLY by the explicit restore path ([restoreConversation]).
+        if (isConversationTombstoned(conversation.id)) return
+
         val exists = conversationRepo.existsConversationById(conversation.id)
-        if (isConversationTombstoned(conversation.id)) {
-            // A tombstoned id whose row is GONE means a still-running finalizer is trying to resurrect
-            // a just-deleted conversation → block it. But if the row EXISTS again, the conversation was
-            // legitimately re-inserted (History Undo, backup/debug restore), so the tombstone is stale:
-            // clear it and save normally. This keeps the resurrection guard while not bricking restores.
-            if (!exists) return
-            tombstonedConversations.remove(conversation.id)
-        }
         if (!exists && conversation.title.isBlank() && conversation.messageNodes.isEmpty()) {
             return // 新会话且为空时不保存
         }
