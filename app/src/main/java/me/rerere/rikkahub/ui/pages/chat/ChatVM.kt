@@ -322,15 +322,23 @@ class ChatVM(
         }
     }
 
-    fun moveConversationToAssistant(conversation: Conversation, targetAssistantId: Uuid) {
+    fun moveConversationToAssistant(target: Conversation, targetAssistantId: Uuid) {
         launchVm(onError = { reportOperationError(it) }) {
-            val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launchVm
-            val updatedConversation = ConversationMutations.moveToAssistant(conversationFull, targetAssistantId)
-            if (conversation.id == _conversationId) {
-                chatService.saveConversation(_conversationId, updatedConversation)
+            if (target.id == _conversationId) {
+                // CAS-fold the assistant rebind onto the LATEST live state so a concurrent streaming
+                // publish can't be clobbered (no session.state reassignment from a stale DB snapshot),
+                // then persist the folded result. Switching mid-turn is safe: the in-flight turn already
+                // captured its assistant/model, so it finishes unchanged and only the NEXT turn rebinds.
+                chatService.updateConversationState(_conversationId) {
+                    ConversationMutations.moveToAssistant(it, targetAssistantId)
+                }
+                conversationRepo.updateConversation(conversation.value)
                 settingsStore.updateAssistant(targetAssistantId)
             } else {
-                conversationRepo.updateConversation(updatedConversation)
+                val conversationFull = conversationRepo.getConversationById(target.id) ?: return@launchVm
+                conversationRepo.updateConversation(
+                    ConversationMutations.moveToAssistant(conversationFull, targetAssistantId)
+                )
             }
         }
     }

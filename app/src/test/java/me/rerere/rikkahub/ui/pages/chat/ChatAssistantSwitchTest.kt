@@ -41,4 +41,29 @@ class ChatAssistantSwitchTest {
         assertEquals(conversation.copy(assistantId = assistantB), movedToB)
         assertEquals(conversation.copy(assistantId = assistantA), movedBackToA)
     }
+
+    @Test
+    fun `rebind folded onto live streaming state preserves in-flight message nodes`() {
+        // Regression: the active-session rebind must fold the assistant change onto the LIVE
+        // conversation (which may carry an in-flight, partially streamed assistant message), not a
+        // stale DB snapshot. moveToAssistant must therefore preserve every message node it is given.
+        val assistantA = Uuid.random()
+        val assistantB = Uuid.random()
+        val liveStreaming = Conversation(
+            id = Uuid.random(),
+            assistantId = assistantA,
+            messageNodes = listOf(
+                MessageNode(messages = listOf(UIMessage(role = MessageRole.USER, parts = listOf(UIMessagePart.Text("ask"))))),
+                // a still-streaming assistant turn that only exists in live session state, not yet in DB
+                MessageNode(messages = listOf(UIMessage(role = MessageRole.ASSISTANT, parts = listOf(UIMessagePart.Text("partial strea"))))),
+            ),
+        )
+
+        val rebound = ConversationMutations.moveToAssistant(liveStreaming, assistantB)
+
+        assertEquals(assistantB, rebound.assistantId)
+        assertEquals(liveStreaming.id, rebound.id)
+        assertEquals(liveStreaming.messageNodes, rebound.messageNodes)
+        assertEquals(liveStreaming.copy(assistantId = assistantB), rebound)
+    }
 }
