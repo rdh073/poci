@@ -33,6 +33,32 @@ class FakeShellRunDAO : ShellRunDAO {
 
     override suspend fun getById(taskId: String): ShellRunEntity? = synchronized(lock) { rows[taskId] }
 
+    override suspend fun attachToolAnchor(
+        taskId: String,
+        toolCallId: String,
+        toolNodeId: String,
+        toolMessageId: String,
+    ): Int = synchronized(lock) {
+        val existing = rows[taskId] ?: return 0
+        val isEmpty = existing.toolCallId == null && existing.toolNodeId == null && existing.toolMessageId == null
+        val isSame = existing.toolCallId == toolCallId &&
+            existing.toolNodeId == toolNodeId &&
+            existing.toolMessageId == toolMessageId
+        if (!isEmpty && !isSame) return 0
+        rows[taskId] = existing.copy(
+            toolCallId = toolCallId,
+            toolNodeId = toolNodeId,
+            toolMessageId = toolMessageId,
+        )
+        1
+    }
+
+    override suspend fun getAnchoredByTaskId(taskId: String): ShellRunEntity? = synchronized(lock) {
+        rows[taskId]?.takeIf {
+            it.toolCallId != null && it.toolNodeId != null && it.toolMessageId != null
+        }
+    }
+
     override suspend fun markForegroundWaiting(taskId: String, startedAt: Long, pidMeta: String?): Int =
         synchronized(lock) {
             val existing = rows[taskId] ?: return 0

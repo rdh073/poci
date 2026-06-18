@@ -92,6 +92,9 @@ import me.rerere.rikkahub.data.db.entity.AgentEventEntity
 import me.rerere.rikkahub.data.ai.agentevent.AgentEventTerminalStatus
 import me.rerere.rikkahub.data.ai.agentevent.SyntheticAppendResult
 import me.rerere.rikkahub.data.ai.agentevent.TurnGateState
+import me.rerere.rikkahub.data.ai.shellrun.ShellCompletion
+import me.rerere.rikkahub.data.ai.shellrun.ShellRunStore
+import me.rerere.rikkahub.data.ai.shellrun.ShellRunToolAnchor
 import me.rerere.rikkahub.data.ai.runtime.AppToolCatalog
 import me.rerere.rikkahub.data.ai.runtime.toAssistantConfig
 import me.rerere.rikkahub.data.ai.task.ExecutionHandleRegistry
@@ -330,6 +333,99 @@ internal fun conversationHasPendingToolApproval(conversation: Conversation): Boo
     conversation.currentMessages.any { message ->
         message.parts.any { it is UIMessagePart.Tool && it.isPending }
     }
+
+internal data class DeferredShellToolAnchorCandidate(
+    val taskId: Uuid,
+    val anchor: ShellRunToolAnchor,
+)
+
+internal data class DeferredShellCompletionResolution(
+    val conversation: Conversation,
+    val node: MessageNode,
+    val messageId: Uuid,
+    val continueGeneration: Boolean,
+)
+
+internal fun shellCompletionTaskId(payloadJson: String): Uuid? =
+    runCatching {
+        Json.parseToJsonElement(payloadJson)
+            .jsonObject["taskId"]
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?.let { Uuid.parse(it) }
+    }.getOrNull()
+
+internal fun findDeferredShellToolAnchors(conversation: Conversation): List<DeferredShellToolAnchorCandidate> =
+    conversation.messageNodes.flatMap { node ->
+        val message = runCatching { node.currentMessage }.getOrNull() ?: return@flatMap emptyList()
+        message.parts.mapNotNull { part ->
+            val tool = part as? UIMessagePart.Tool ?: return@mapNotNull null
+            if (tool.toolName != "workspace_shell" || !tool.isDeferred) return@mapNotNull null
+            val taskId = deferredShellTaskId(tool) ?: return@mapNotNull null
+            DeferredShellToolAnchorCandidate(
+                taskId = taskId,
+                anchor = ShellRunToolAnchor(
+                    toolCallId = tool.toolCallId,
+                    toolNodeId = node.id,
+                    toolMessageId = message.id,
+                ),
+            )
+        }
+    }
+
+internal fun resolveDeferredShellCompletion(
+    conversation: Conversation,
+    anchor: ShellRunToolAnchor,
+    payloadJson: String,
+): DeferredShellCompletionResolution? {
+    var resolvedNode: MessageNode? = null
+    var shouldContinue = false
+    var foundAnchor = false
+    val updatedNodes = conversation.messageNodes.map { node ->
+        if (node.id != anchor.toolNodeId) return@map node
+        val updatedMessages = node.messages.map { message ->
+            if (message.id != anchor.toolMessageId) return@map message
+            var matchedTool = false
+            val updatedParts = message.parts.map { part ->
+                val tool = part as? UIMessagePart.Tool ?: return@map part
+                if (tool.toolCallId != anchor.toolCallId) return@map part
+                matchedTool = true
+                val currentText = (tool.output.singleOrNull() as? UIMessagePart.Text)?.text
+                if (tool.isDeferred) {
+                    shouldContinue = true
+                    tool.copy(output = listOf(UIMessagePart.Text(payloadJson))).asResolved()
+                } else if (currentText == payloadJson) {
+                    tool.asResolved()
+                } else {
+                    tool
+                }
+            }
+            if (matchedTool) foundAnchor = true
+            if (matchedTool) message.copy(parts = updatedParts) else message
+        }
+        val updatedNode = node.copy(messages = updatedMessages)
+        if (foundAnchor) resolvedNode = updatedNode
+        updatedNode
+    }
+    val node = resolvedNode ?: return null
+    return DeferredShellCompletionResolution(
+        conversation = conversation.copy(messageNodes = updatedNodes, updateAt = Instant.now()),
+        node = node,
+        messageId = anchor.toolMessageId,
+        continueGeneration = shouldContinue,
+    )
+}
+
+private fun deferredShellTaskId(tool: UIMessagePart.Tool): Uuid? {
+    val text = (tool.output.singleOrNull() as? UIMessagePart.Text)?.text ?: return null
+    return runCatching {
+        Json.parseToJsonElement(text)
+            .jsonObject["taskId"]
+            ?.jsonPrimitive
+            ?.contentOrNull
+            ?.let { Uuid.parse(it) }
+    }.getOrNull()
+}
 
 /**
  * Whether `withAutomationLease`'s teardown must PRESERVE the per-run grant for an approval-resume
@@ -676,6 +772,7 @@ class ChatService(
     // conversation at an idle turn-end. ChatService owns the drain seam; the store is persistence
     // only.
     private val agentEventStore: AgentEventStore,
+    private val shellRunStore: ShellRunStore,
     // On-device UI automation (#187 v1, read-only). Registry hands out the live, system-instantiated
     // AccessibilityRuntime as a pure backend; the kill-switch dispatches STOP to the active guard(s).
     private val automationRegistry: AutomationRuntimeRegistry,
@@ -1220,6 +1317,28 @@ class ChatService(
                     ),
                     continueGeneration = false,
                 )
+            }
+
+            if (event.kind == ShellCompletion.KIND) {
+                val taskId = shellCompletionTaskId(event.payloadJson)
+                val anchor = taskId?.let { shellRunStore.getToolAnchor(it) }
+                val resolution = anchor?.let {
+                    resolveDeferredShellCompletion(
+                        conversation = persistedConversation,
+                        anchor = it,
+                        payloadJson = event.payloadJson,
+                    )
+                }
+                if (resolution != null) {
+                    conversationRepo.updateMessageNode(resolution.conversation, resolution.node)
+                    return@claimAndAppendAndConsume ClaimAppendAction.Append(
+                        synthetic = SyntheticAppendResult(
+                            syntheticNodeId = resolution.node.id.toString(),
+                            syntheticMessageId = resolution.messageId.toString(),
+                        ),
+                        continueGeneration = resolution.continueGeneration,
+                    )
+                }
             }
 
             val syntheticMessage = buildSyntheticAgentEventMessage(event)
@@ -2146,7 +2265,7 @@ class ChatService(
         // byte-for-byte with sanitizeForUpload's repairOrphanTools; whichever runs first makes the part
         // executed and the other no-ops. Every other interrupted tool is still finalized as cancelled.
         if (shouldBackgroundShellOnStop(tool)) {
-            return tool.copy(output = listOf(UIMessagePart.Text(SHELL_BACKGROUNDED_MARKER)))
+            return tool.copy(output = listOf(UIMessagePart.Text(SHELL_BACKGROUNDED_MARKER))).asDeferred()
         }
         return tool.copy(
             output = listOf(
@@ -2453,6 +2572,19 @@ class ChatService(
             conversationRepo.insertConversation(conversation)
         } else {
             conversationRepo.updateConversation(conversation)
+        }
+        attachDeferredShellToolAnchors(conversation)
+    }
+
+    private suspend fun attachDeferredShellToolAnchors(conversation: Conversation) {
+        findDeferredShellToolAnchors(conversation).forEach { candidate ->
+            val attached = shellRunStore.attachToolAnchor(candidate.taskId, candidate.anchor)
+            if (!attached) {
+                Log.w(
+                    TAG,
+                    "attachDeferredShellToolAnchors: failed to attach anchor for task ${candidate.taskId}"
+                )
+            }
         }
     }
 

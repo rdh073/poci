@@ -24,6 +24,29 @@ interface ShellRunDAO {
     @Query("SELECT * FROM shell_runs WHERE task_id = :taskId")
     suspend fun getById(taskId: String): ShellRunEntity?
 
+    /**
+     * Idempotently attaches the visible tool anchor for a detached run. A repeated write of the same
+     * anchor matches; a conflicting anchor matches zero rows and is rejected by the store.
+     */
+    @Query(
+        "UPDATE shell_runs SET tool_call_id = :toolCallId, tool_node_id = :toolNodeId, " +
+            "tool_message_id = :toolMessageId WHERE task_id = :taskId AND " +
+            "((tool_call_id IS NULL AND tool_node_id IS NULL AND tool_message_id IS NULL) OR " +
+            "(tool_call_id = :toolCallId AND tool_node_id = :toolNodeId AND tool_message_id = :toolMessageId))"
+    )
+    suspend fun attachToolAnchor(
+        taskId: String,
+        toolCallId: String,
+        toolNodeId: String,
+        toolMessageId: String,
+    ): Int
+
+    @Query(
+        "SELECT * FROM shell_runs WHERE task_id = :taskId AND tool_call_id IS NOT NULL " +
+            "AND tool_node_id IS NOT NULL AND tool_message_id IS NOT NULL"
+    )
+    suspend fun getAnchoredByTaskId(taskId: String): ShellRunEntity?
+
     /** STARTED -> FOREGROUND_WAITING once the handle is held; only a STARTED row flips. */
     @Query(
         "UPDATE shell_runs SET status = 'FOREGROUND_WAITING', started_at = :startedAt, pid_meta = :pidMeta " +

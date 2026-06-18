@@ -242,6 +242,20 @@ class ConversationRepository(
         )
     }
 
+    suspend fun updateMessageNode(conversation: Conversation, node: MessageNode) {
+        val conversationId = conversation.id.toString()
+        val index = conversation.messageNodes.indexOfFirst { it.id == node.id }
+        require(index >= 0) { "message node ${node.id} is not part of conversation ${conversation.id}" }
+        conversationDAO.update(conversationToConversationEntity(conversation))
+        messageNodeDAO.update(
+            buildMessageNodeEntity(
+                node = node,
+                conversationId = conversationId,
+                index = index,
+            )
+        )
+    }
+
     suspend fun updateConversation(conversation: Conversation) {
         database.withTransaction {
             conversationDAO.update(
