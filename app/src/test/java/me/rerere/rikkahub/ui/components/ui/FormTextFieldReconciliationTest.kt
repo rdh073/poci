@@ -73,6 +73,24 @@ class FormTextFieldReconciliationTest {
     }
 
     @Test
+    fun normalized_echo_keeps_local_text_no_clobber_tradeoff() {
+        // Deliberate tradeoff: a value-only reconciler cannot tell a stale in-flight echo from a
+        // normalized echo (e.g. the VM trimmed "abc " to "abc"). While awaiting the ack we KEEP the
+        // local text rather than risk clobbering freshly typed text — no data loss, no cursor jump.
+        // The normalized value is reflected on the next entity/row key change (reseed). Fields whose
+        // value the VM normalizes (trim/parse) have no same-key external source, so this never strands
+        // a real external update in practice.
+        val result = reconcileFormTextField(
+            localText = "abc ",
+            incomingExternalValue = "abc",
+            awaitingAck = true,
+            focused = false,
+        )
+
+        assertEquals(FormTextFieldReconciliation.KeepLocal, result)
+    }
+
+    @Test
     fun external_key_change_resets_buffer_immediately() {
         val oldBuffer = FormTextFieldBufferSnapshot(
             externalKey = "assistant-a:name",
