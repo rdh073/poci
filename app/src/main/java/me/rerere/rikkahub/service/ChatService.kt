@@ -125,8 +125,10 @@ import me.rerere.rikkahub.data.datastore.SettingsStore
 import me.rerere.rikkahub.data.datastore.findModelById
 import me.rerere.rikkahub.data.datastore.findProvider
 import me.rerere.rikkahub.data.datastore.getAssistantById
+import me.rerere.rikkahub.data.datastore.getAssistantByIdOrCurrent
 import me.rerere.rikkahub.data.datastore.getCurrentAssistant
 import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.getChatModelForAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.AGENT_EVENT_ID_METADATA_KEY
 import me.rerere.rikkahub.data.model.AGENT_EVENT_KIND_METADATA_KEY
@@ -1112,8 +1114,7 @@ class ChatService(
 
             val currentConversation = session.state.value
             val settings = settingsStore.settingsFlow.first()
-            val assistant = settings.getAssistantById(currentConversation.assistantId)
-                ?: settings.getCurrentAssistant()
+            val assistant = settings.getAssistantByIdOrCurrent(currentConversation.assistantId)
             val processedContent = preprocessUserInputParts(content, assistant)
 
             // UserPromptSubmit hooks (#200 T8): the send seam. Injected additionalContext is
@@ -1447,7 +1448,7 @@ class ChatService(
         val conversation = session.state.value
         val settings = settingsStore.settingsFlow.first()
         // 即将接收下一次请求的对话模型——其窗口才是触发判定的依据（压缩模型可能不同，与触发无关）。
-        val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return
+        val model = settings.getChatModelForAssistant(assistant) ?: return
 
         val window = getContextWindowForModel(model)
         val messages = conversation.currentMessages
@@ -1844,9 +1845,8 @@ class ChatService(
     ): Boolean {
         val settings = settingsStore.settingsFlow.first()
         val initialConversation = getConversationFlow(conversationId).value
-        val assistant = settings.getAssistantById(initialConversation.assistantId)
-            ?: settings.getCurrentAssistant()
-        val model = settings.findModelById(assistant.chatModelId ?: settings.chatModelId) ?: return false
+        val assistant = settings.getAssistantByIdOrCurrent(initialConversation.assistantId)
+        val model = settings.getChatModelForAssistant(assistant) ?: return false
 
         val senderName = if (assistant.useAssistantAvatar) {
             assistant.name.ifEmpty { context.getString(R.string.assistant_page_default_assistant) }
@@ -2696,8 +2696,7 @@ class ChatService(
 
         val currentConversation = getConversationFlow(conversationId).value
         val settings = settingsStore.settingsFlow.first()
-        val assistant = settings.getAssistantById(currentConversation.assistantId)
-            ?: settings.getCurrentAssistant()
+        val assistant = settings.getAssistantByIdOrCurrent(currentConversation.assistantId)
         val processedParts = preprocessUserInputParts(parts, assistant)
 
         // role 占位：ConversationMutations.editMessage 会对每个命中节点用 node.role 重新落款，

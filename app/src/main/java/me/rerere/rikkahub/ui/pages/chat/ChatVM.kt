@@ -43,6 +43,7 @@ import me.rerere.rikkahub.data.repository.FavoriteRepository
 import me.rerere.rikkahub.data.repository.WorkspaceRepository
 import me.rerere.rikkahub.service.ChatError
 import me.rerere.rikkahub.service.ChatService
+import me.rerere.rikkahub.service.mutation.ConversationMutations
 import me.rerere.rikkahub.ui.hooks.writeStringPreference
 import me.rerere.rikkahub.ui.hooks.ChatInputState
 import me.rerere.common.state.UiState
@@ -324,7 +325,7 @@ class ChatVM(
     fun moveConversationToAssistant(conversation: Conversation, targetAssistantId: Uuid) {
         launchVm(onError = { reportOperationError(it) }) {
             val conversationFull = conversationRepo.getConversationById(conversation.id) ?: return@launchVm
-            val updatedConversation = conversationFull.copy(assistantId = targetAssistantId)
+            val updatedConversation = ConversationMutations.moveToAssistant(conversationFull, targetAssistantId)
             if (conversation.id == _conversationId) {
                 chatService.saveConversation(_conversationId, updatedConversation)
                 settingsStore.updateAssistant(targetAssistantId)

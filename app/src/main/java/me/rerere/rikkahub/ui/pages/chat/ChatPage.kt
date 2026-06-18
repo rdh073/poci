@@ -68,7 +68,6 @@ import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import me.rerere.ai.provider.Model
 import me.rerere.ai.ui.UIMessagePart
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Cancel01
@@ -82,8 +81,8 @@ import me.rerere.rikkahub.data.datastore.Settings
 import me.rerere.rikkahub.data.model.AutomationVerb
 import me.rerere.rikkahub.ui.pages.assistant.detail.DEFAULT_MAX_STEPS
 import me.rerere.rikkahub.data.datastore.findProvider
-import me.rerere.rikkahub.data.datastore.getCurrentAssistant
-import me.rerere.rikkahub.data.datastore.getCurrentChatModel
+import me.rerere.rikkahub.data.datastore.getAssistantByIdOrCurrent
+import me.rerere.rikkahub.data.datastore.getChatModelForAssistant
 import me.rerere.rikkahub.data.files.FilesManager
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.service.ChatError
@@ -118,7 +117,6 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val conversation by vm.conversation.collectAsStateWithLifecycle()
     val loadingJob by vm.conversationJob.collectAsStateWithLifecycle()
     val processingStatus by vm.processingStatus.collectAsStateWithLifecycle()
-    val currentChatModel by vm.currentChatModel.collectAsStateWithLifecycle()
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
     val backgroundJobs by vm.backgroundJobs.collectAsStateWithLifecycle()
@@ -214,7 +212,6 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     vm = vm,
                     chatListState = chatListState,
                     enableWebSearch = enableWebSearch,
-                    currentChatModel = currentChatModel,
                     bigScreen = true,
                     errors = errors,
                     backgroundJobs = backgroundJobs,
@@ -247,7 +244,6 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     vm = vm,
                     chatListState = chatListState,
                     enableWebSearch = enableWebSearch,
-                    currentChatModel = currentChatModel,
                     bigScreen = false,
                     errors = errors,
                     backgroundJobs = backgroundJobs,
@@ -279,7 +275,6 @@ private fun ChatPageContent(
     vm: ChatVM,
     chatListState: LazyListState,
     enableWebSearch: Boolean,
-    currentChatModel: Model?,
     errors: List<ChatError>,
     backgroundJobs: List<UiBackgroundJob>,
     onDismissError: (Uuid) -> Unit,
@@ -293,12 +288,14 @@ private fun ChatPageContent(
     var showBackgroundJobs by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
     val selectModelFirstMessage = stringResource(R.string.chat_page_select_model_first)
+    val activeAssistant = setting.getAssistantByIdOrCurrent(conversation.assistantId)
+    val activeChatModel = setting.getChatModelForAssistant(activeAssistant)
 
     TTSAutoPlay(vm = vm, setting = setting, conversation = conversation)
 
     // Single submit path for tap and long-press send; only the answer flag differs.
     fun submitInput(answer: Boolean) {
-        if (shouldBlockSubmitForMissingModel(answer = answer, hasChatModel = currentChatModel != null)) {
+        if (shouldBlockSubmitForMissingModel(answer = answer, hasChatModel = activeChatModel != null)) {
             toaster.show(selectModelFirstMessage, type = ToastType.Error)
             return
         }
@@ -372,7 +369,7 @@ private fun ChatPageContent(
                         submitInput(answer = false)
                     },
                     onUpdateChatModel = {
-                        vm.setChatModel(assistant = setting.getCurrentAssistant(), model = it)
+                        vm.setChatModel(assistant = activeAssistant, model = it)
                     },
                     onUpdateAssistant = {
                         vm.updateSettings(
@@ -386,6 +383,9 @@ private fun ChatPageContent(
                                 }
                             )
                         )
+                    },
+                    onSwitchAssistant = {
+                        vm.moveConversationToAssistant(conversation, it.id)
                     },
                     onUpdateConversation = {
                         vm.updateConversation(it)
@@ -724,8 +724,8 @@ private fun TopBar(
                 color = Color.Transparent,
             ) {
                 Column {
-                    val assistant = settings.getCurrentAssistant()
-                    val model = settings.getCurrentChatModel()
+                    val assistant = settings.getAssistantByIdOrCurrent(conversation.assistantId)
+                    val model = settings.getChatModelForAssistant(assistant)
                     val provider = model?.findProvider(providers = settings.providers, checkOverwrite = false)
                     Text(
                         text = conversation.title.ifBlank { stringResource(R.string.chat_page_new_chat) },
