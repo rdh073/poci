@@ -2,6 +2,11 @@ package me.rerere.rikkahub.ui.pages.chat
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -46,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -55,6 +61,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Zap
 import com.dokar.sonner.ToastType
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
@@ -113,6 +121,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
     val currentChatModel by vm.currentChatModel.collectAsStateWithLifecycle()
     val enableWebSearch by vm.enableWebSearch.collectAsStateWithLifecycle()
     val errors by vm.errors.collectAsStateWithLifecycle()
+    val backgroundJobs by vm.backgroundJobs.collectAsStateWithLifecycle()
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val softwareKeyboardController = LocalSoftwareKeyboardController.current
@@ -208,6 +217,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     currentChatModel = currentChatModel,
                     bigScreen = true,
                     errors = errors,
+                    backgroundJobs = backgroundJobs,
                     onDismissError = { vm.dismissError(it) },
                     onClearAllErrors = { vm.clearAllErrors() },
                 )
@@ -240,6 +250,7 @@ fun ChatPage(id: Uuid, text: String?, files: List<Uri>, nodeId: Uuid? = null) {
                     currentChatModel = currentChatModel,
                     bigScreen = false,
                     errors = errors,
+                    backgroundJobs = backgroundJobs,
                     onDismissError = { vm.dismissError(it) },
                     onClearAllErrors = { vm.clearAllErrors() },
                 )
@@ -270,6 +281,7 @@ private fun ChatPageContent(
     enableWebSearch: Boolean,
     currentChatModel: Model?,
     errors: List<ChatError>,
+    backgroundJobs: List<UiBackgroundJob>,
     onDismissError: (Uuid) -> Unit,
     onClearAllErrors: () -> Unit,
 ) {
@@ -278,6 +290,7 @@ private fun ChatPageContent(
     var previewMode by rememberSaveable { mutableStateOf(false) }
     var showBoard by rememberSaveable { mutableStateOf(false) }
     var showAutomationGrant by rememberSaveable { mutableStateOf(false) }
+    var showBackgroundJobs by rememberSaveable { mutableStateOf(false) }
     val hazeState = rememberHazeState()
     val selectModelFirstMessage = stringResource(R.string.chat_page_select_model_first)
 
@@ -327,6 +340,10 @@ private fun ChatPageContent(
                     },
                     onOpenAutomationGrant = {
                         showAutomationGrant = true
+                    },
+                    backgroundJobs = backgroundJobs,
+                    onOpenBackgroundJobs = {
+                        showBackgroundJobs = true
                     },
                     onUpdateTitle = {
                         vm.updateTitle(it)
@@ -484,6 +501,14 @@ private fun ChatPageContent(
             AutomationGrantSheet(
                 vm = vm,
                 onDismiss = { showAutomationGrant = false },
+            )
+        }
+
+        if (showBackgroundJobs) {
+            BackgroundShellJobsSheet(
+                jobs = backgroundJobs,
+                onDismiss = { showBackgroundJobs = false },
+                loadTail = { vm.tailBackgroundJob(it) },
             )
         }
     }
@@ -662,6 +687,8 @@ private fun TopBar(
     onClickMenu: () -> Unit,
     onOpenBoard: () -> Unit,
     onOpenAutomationGrant: () -> Unit,
+    backgroundJobs: List<UiBackgroundJob>,
+    onOpenBackgroundJobs: () -> Unit,
     onNewChat: () -> Unit,
     onUpdateTitle: (String) -> Unit
 ) {
@@ -721,6 +748,31 @@ private fun TopBar(
             }
         },
         actions = {
+            if (isBackgroundShellJobIndicatorVisible(backgroundJobs)) {
+                val transition = rememberInfiniteTransition(label = "Background jobs pulse")
+                val alpha by transition.animateFloat(
+                    initialValue = 0.45f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 700),
+                        repeatMode = RepeatMode.Reverse,
+                    ),
+                    label = "Background jobs alpha",
+                )
+                IconButton(
+                    onClick = {
+                        onOpenBackgroundJobs()
+                    }
+                ) {
+                    Icon(
+                        imageVector = Lucide.Zap,
+                        contentDescription = "Background jobs",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.graphicsLayer { this.alpha = alpha },
+                    )
+                }
+            }
+
             IconButton(
                 onClick = {
                     onOpenBoard()

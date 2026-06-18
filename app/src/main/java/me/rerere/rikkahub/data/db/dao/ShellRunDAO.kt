@@ -3,6 +3,7 @@ package me.rerere.rikkahub.data.db.dao
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 import me.rerere.rikkahub.data.db.entity.ShellRunEntity
 
 /**
@@ -105,6 +106,17 @@ interface ShellRunDAO {
             "('STARTED', 'FOREGROUND_WAITING', 'DETACHED', 'BACKGROUND_RUNNING')"
     )
     suspend fun runningRows(): List<ShellRunEntity>
+
+    /**
+     * Rows that have genuinely left the foreground turn and are still running for one conversation.
+     * STARTED / FOREGROUND_WAITING are still foreground work; terminal rows are already complete.
+     */
+    @Query(
+        "SELECT * FROM shell_runs WHERE conversation_id = :conversationId " +
+            "AND status IN ('DETACHED', 'BACKGROUND_RUNNING') " +
+            "ORDER BY COALESCE(detached_at, started_at, created_at) DESC"
+    )
+    fun observeBackgroundJobs(conversationId: String): Flow<List<ShellRunEntity>>
 
     /** Cleanup hook for a deleted conversation (no FK cascade, mirroring [AgentEventDAO]). */
     @Query("DELETE FROM shell_runs WHERE conversation_id = :conversationId")

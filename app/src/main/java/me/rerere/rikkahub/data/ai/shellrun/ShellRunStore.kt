@@ -5,6 +5,7 @@ import me.rerere.rikkahub.data.db.dao.ShellRunDAO
 import me.rerere.rikkahub.data.db.entity.ShellRunEntity
 import me.rerere.rikkahub.data.db.entity.ShellRunStatus
 import me.rerere.rikkahub.data.repository.BoardTransactionRunner
+import kotlinx.coroutines.flow.Flow
 import kotlin.uuid.Uuid
 
 /**
@@ -87,6 +88,9 @@ interface ShellRunStore {
 
     /** Cleanup hook for a deleted conversation (explicit delete, no FK cascade). */
     suspend fun deleteByConversationId(conversationId: Uuid): Int
+
+    /** Observe genuinely-backgrounded, non-terminal shell jobs for one conversation. */
+    fun observeBackgroundJobs(conversationId: Uuid): Flow<List<ShellRunEntity>>
 }
 
 data class ShellRunToolAnchor(
@@ -260,4 +264,7 @@ class RoomShellRunStore(
 
     override suspend fun deleteByConversationId(conversationId: Uuid): Int =
         transactions.inTransaction { dao.deleteByConversationId(conversationId.toString()) }
+
+    override fun observeBackgroundJobs(conversationId: Uuid): Flow<List<ShellRunEntity>> =
+        dao.observeBackgroundJobs(conversationId.toString())
 }
