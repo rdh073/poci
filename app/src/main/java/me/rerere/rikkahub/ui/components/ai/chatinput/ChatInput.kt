@@ -392,11 +392,14 @@ fun ChatInput(
                                 .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(2.dp)
                         ) {
-                            // Assistant Picker
+                            // Assistant Picker — disabled while a turn is generating so an in-flight
+                            // turn (which re-reads the live assistant at completion) cannot be rebound
+                            // mid-flight; switch only between turns.
                             ActionIconButton(
                                 onClick = {
-                                    showAssistantSheet = true
-                                }
+                                    if (!loading) showAssistantSheet = true
+                                },
+                                enabled = !loading,
                             ) {
                                 Icon(
                                     imageVector = Lucide.Bot,
