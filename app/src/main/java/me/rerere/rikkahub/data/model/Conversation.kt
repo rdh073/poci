@@ -279,8 +279,7 @@ private fun UIMessage.repairOrphanTools(): UIMessage {
             part.approvalState !is ToolApprovalState.Pending
         ) {
             val marker = if (part.isBackgroundableShell()) SHELL_BACKGROUNDED_MARKER else TOOL_CANCELLED_MARKER
-            val repaired = part.copy(output = listOf(UIMessagePart.Text(marker)))
-            if (part.isBackgroundableShell()) repaired.asDeferred() else repaired
+            part.copy(output = listOf(UIMessagePart.Text(marker)))
         } else {
             part
         }

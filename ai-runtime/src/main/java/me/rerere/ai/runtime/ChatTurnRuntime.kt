@@ -163,7 +163,7 @@ class ChatTurnRuntime(
                 addAll(tools)
             }
 
-            if (messages.lastOrNull()?.getTools()?.any { it.isDeferred } == true) {
+            if (messages.any { it.getTools().any { tool -> tool.isDeferred } }) {
                 logSink.info(TAG, "generateText: waiting for deferred tool output")
                 break
             }

@@ -373,6 +373,28 @@ internal fun findDeferredShellToolAnchors(conversation: Conversation): List<Defe
         }
     }
 
+internal fun buildSyntheticAgentEventMessage(event: AgentEventEntity): UIMessage =
+    UIMessage(
+        role = MessageRole.ASSISTANT,
+        parts = listOf(
+            UIMessagePart.Tool(
+                toolCallId = event.id,
+                toolName = sanitizeSyntheticToolName(event.kind),
+                input = "",
+                metadata = buildJsonObject {
+                    put(SYNTHETIC_KIND_METADATA_KEY, AGENT_EVENT_SYNTHETIC_KIND)
+                    put(AGENT_EVENT_ID_METADATA_KEY, event.id)
+                    put(AGENT_EVENT_KIND_METADATA_KEY, event.kind)
+                },
+                output = listOf(
+                    UIMessagePart.Text(
+                        text = event.payloadJson,
+                    )
+                ),
+            ),
+        ),
+    )
+
 internal fun resolveDeferredShellCompletion(
     conversation: Conversation,
     anchor: ShellRunToolAnchor,
@@ -1321,7 +1343,10 @@ class ChatService(
 
             if (event.kind == ShellCompletion.KIND) {
                 val taskId = shellCompletionTaskId(event.payloadJson)
-                val anchor = taskId?.let { shellRunStore.getToolAnchor(it) }
+                val anchor = taskId?.let { id ->
+                    shellRunStore.getToolAnchor(id)
+                        ?: findDeferredShellToolAnchors(persistedConversation).firstOrNull { it.taskId == id }?.anchor
+                }
                 val resolution = anchor?.let {
                     resolveDeferredShellCompletion(
                         conversation = persistedConversation,
@@ -1391,28 +1416,6 @@ class ChatService(
                     }
             }
             .firstOrNull()
-
-    private fun buildSyntheticAgentEventMessage(event: AgentEventEntity): UIMessage =
-        UIMessage(
-            role = MessageRole.ASSISTANT,
-            parts = listOf(
-            UIMessagePart.Tool(
-                toolCallId = event.id,
-                toolName = sanitizeSyntheticToolName(event.kind),
-                input = "",
-                metadata = buildJsonObject {
-                    put(SYNTHETIC_KIND_METADATA_KEY, AGENT_EVENT_SYNTHETIC_KIND)
-                    put(AGENT_EVENT_ID_METADATA_KEY, event.id)
-                    put(AGENT_EVENT_KIND_METADATA_KEY, event.kind)
-                },
-                output = listOf(
-                    UIMessagePart.Text(
-                        text = event.payloadJson,
-                    )
-                ),
-            ),
-        ),
-    )
 
     // 自动压缩历史的触发与执行（design #193 Stage 1：token 触发器 + 熔断器）。
     //
@@ -2265,7 +2268,7 @@ class ChatService(
         // byte-for-byte with sanitizeForUpload's repairOrphanTools; whichever runs first makes the part
         // executed and the other no-ops. Every other interrupted tool is still finalized as cancelled.
         if (shouldBackgroundShellOnStop(tool)) {
-            return tool.copy(output = listOf(UIMessagePart.Text(SHELL_BACKGROUNDED_MARKER))).asDeferred()
+            return tool.copy(output = listOf(UIMessagePart.Text(SHELL_BACKGROUNDED_MARKER)))
         }
         return tool.copy(
             output = listOf(

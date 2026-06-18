@@ -3,12 +3,16 @@ package me.rerere.rikkahub.service
 import me.rerere.ai.core.MessageRole
 import me.rerere.ai.ui.UIMessage
 import me.rerere.ai.ui.UIMessagePart
-import me.rerere.rikkahub.data.ai.shellrun.ShellRunToolAnchor
+import me.rerere.rikkahub.data.ai.shellrun.ShellCompletion
+import me.rerere.rikkahub.data.db.entity.AgentEventEntity
+import me.rerere.rikkahub.data.db.entity.AgentEventStatus
 import me.rerere.rikkahub.data.model.Conversation
 import me.rerere.rikkahub.data.model.MessageNode
+import me.rerere.rikkahub.data.model.toMessageNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.uuid.Uuid
@@ -58,14 +62,11 @@ class DeferredShellCompletionPropertyTest {
             assistantId = Uuid.random(),
             messageNodes = listOf(node),
         )
-        val anchor = ShellRunToolAnchor(
-            toolCallId = tool.toolCallId,
-            toolNodeId = node.id,
-            toolMessageId = message.id,
-        )
+        val anchor = findDeferredShellToolAnchors(conversation).firstOrNull { it.taskId == taskId }?.anchor
         val payload = """{"taskId":"$taskId","status":"SUCCEEDED","exitCode":0,"tail":"done"}"""
 
-        val first = resolveDeferredShellCompletion(conversation, anchor, payload)
+        assertNotNull("the drain must derive an anchor from the deferred tool when the store has none", anchor)
+        val first = resolveDeferredShellCompletion(conversation, anchor!!, payload)
         assertNotNull(first)
         assertTrue(first!!.continueGeneration)
         assertEquals(1, first.conversation.messageNodes.size)
@@ -81,5 +82,43 @@ class DeferredShellCompletionPropertyTest {
             .flatMap { it.parts }
             .filterIsInstance<UIMessagePart.Tool>()
         assertEquals(1, finalTools.count { (it.output.singleOrNull() as? UIMessagePart.Text)?.text == payload })
+    }
+
+    @Test
+    fun `completion with no matching deferred tool falls back to synthetic assistant tool`() {
+        val taskId = Uuid.random()
+        val payload = """{"taskId":"$taskId","status":"SUCCEEDED","exitCode":0,"tail":"done"}"""
+        val taskIdLessRunningMarker = UIMessagePart.Tool(
+            toolCallId = "call-shell",
+            toolName = "workspace_shell",
+            input = """{"command":"sleep 1","detachAfterSeconds":1}""",
+            output = listOf(UIMessagePart.Text("""{"status":"running"}""")),
+        )
+        val conversation = Conversation(
+            id = Uuid.random(),
+            assistantId = Uuid.random(),
+            messageNodes = listOf(
+                UIMessage(role = MessageRole.ASSISTANT, parts = listOf(taskIdLessRunningMarker)).toMessageNode()
+            ),
+        )
+        val event = AgentEventEntity(
+            id = "event-1",
+            conversationId = conversation.id.toString(),
+            dedupeKey = "shell:$taskId",
+            enqueueSeq = 1L,
+            kind = ShellCompletion.KIND,
+            payloadJson = payload,
+            status = AgentEventStatus.PENDING.name,
+            createdAt = 1L,
+        )
+
+        val anchor = findDeferredShellToolAnchors(conversation).firstOrNull { it.taskId == taskId }?.anchor
+        val synthetic = buildSyntheticAgentEventMessage(event)
+
+        assertNull("without a deferred tool carrying the taskId, the drain must use the synthetic fallback", anchor)
+        assertEquals(MessageRole.ASSISTANT, synthetic.role)
+        val syntheticTool = synthetic.parts.single() as UIMessagePart.Tool
+        assertEquals(sanitizeSyntheticToolName(ShellCompletion.KIND), syntheticTool.toolName)
+        assertEquals(payload, (syntheticTool.output.single() as UIMessagePart.Text).text)
     }
 }
