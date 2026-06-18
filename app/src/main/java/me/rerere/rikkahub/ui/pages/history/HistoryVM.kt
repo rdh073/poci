@@ -64,7 +64,9 @@ class HistoryVM(
 
     fun restoreConversation(conversation: Conversation) {
         viewModelScope.launch {
-            conversationRepo.insertConversation(conversation)
+            // Through ChatService so the delete tombstone is cleared; a direct repo insert would leave
+            // the id tombstoned and saveConversation would keep no-op'ing for the restored chat.
+            chatService.restoreConversation(conversation)
         }
     }
 
