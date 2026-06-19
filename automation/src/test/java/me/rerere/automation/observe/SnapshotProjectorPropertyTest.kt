@@ -718,11 +718,9 @@ class SnapshotProjectorPropertyTest {
         )
         val snap = project(tree, grantedPkg)
         assertTrue(snap.targets.any { it.text == "GrantedMain" })
-        // The dialog node is editable, so its display text is the hint (not the value "ForeignDialog");
-        // address it by its stable semantic key instead.
-        val dialog = snap.targets.firstOrNull { it.semanticKey == "foreign-key" }
+        val dialog = snap.targets.firstOrNull { it.text == "ForeignDialog" }
         assertEquals("system-window targets should be projected", foreignPkg, dialog?.sourcePackage)
-        assertEquals("an editable system node's VALUE must not be projected as display text", "foreign-key", dialog?.text)
+        assertEquals("an editable node's value is projected as display text", "ForeignDialog", dialog?.text)
         assertEquals("system-window provenance carries semantic key", "foreign-key", dialog?.semanticKey)
         assertEquals(
             "system-window provenance carries view/form id",

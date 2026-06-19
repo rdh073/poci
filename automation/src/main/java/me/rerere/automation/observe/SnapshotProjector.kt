@@ -326,19 +326,18 @@ class SnapshotProjector {
                 node.windowId >= 0 -> node.windowId
                 else -> UNKNOWN_WINDOW_ID
             }
-            // Model-facing display text. Two values must NEVER reach the model: a password (masked to
-            // bullets, design I1/P1) and a non-password EDITABLE field's CURRENT VALUE — an editable
-            // field can hold a secret the app never flagged as password (an OTP, a card number, a draft),
-            // so its `node.text` stays internal-only (it lives on [UiTarget.editableText] for the P9
-            // no-op) and the model sees only the field's label/hint (contentDescription). A non-editable
-            // node's text IS a label (a button caption, a status line), so it renders as-is.
-            val text = when {
-                node.password -> {
-                    val rawText = node.text ?: node.contentDescription
-                    rawText?.let { "•".repeat(it.length.coerceAtMost(MAX_MASK_LENGTH)) }
-                }
-                node.editable -> node.contentDescription
-                else -> node.text ?: node.contentDescription
+            // Model-facing display text. A password's plaintext is NEVER surfaced (masked to bullets
+            // sized to the input, design I1/P1). Everything else — including an editable field's CURRENT
+            // VALUE — renders as-is: a UI-automation agent must read back a field's contents to verify
+            // its own `ui_set_text` input and to reason about the screen; withholding non-password
+            // editable values left the field write-only and made weaker models loop, unable to confirm a
+            // write landed. (The genuine secret — a password field — is still masked; the internal
+            // [UiTarget.editableText] remains the ground-truth value for the P9 idempotency no-op.)
+            val rawText = node.text ?: node.contentDescription
+            val text = if (node.password) {
+                rawText?.let { "•".repeat(it.length.coerceAtMost(MAX_MASK_LENGTH)) }
+            } else {
+                rawText
             }
             val fingerprint = computeStructuralFingerprint(
                 windowId = effectiveWindowId,
