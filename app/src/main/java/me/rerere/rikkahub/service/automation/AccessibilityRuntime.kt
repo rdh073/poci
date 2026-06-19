@@ -658,7 +658,7 @@ class AccessibilityRuntime : AccessibilityService(), AutomationBackend {
             while (ancestor != null && depth < MAX_ANCESTOR_CLIMB) {
                 held.add(ancestor)
                 if (capable(ancestor) && ancestor.performAction(actionId)) return true
-                ancestor = runCatching { ancestor?.parent }.getOrNull()
+                ancestor = runCatching { ancestor.parent }.getOrNull()
                 depth++
             }
             return false
