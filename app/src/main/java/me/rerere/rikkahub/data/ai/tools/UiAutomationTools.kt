@@ -183,14 +183,17 @@ fun getUiAutomationTools(
     // screen (same authorized surface) use it; otherwise (surface switch / framework refusal / missing
     // tid) fold in an authorized re-capture. Only when even that is denied does the bare re-observe text
     // remain — there is genuinely no authorized screen to show.
-    suspend fun staleResponse(carried: UiSnapshot?): List<UIMessagePart> {
+    suspend fun staleResponse(
+        carried: UiSnapshot?,
+        redecidePreamble: String = ACT_STALE_REDECIDE_MESSAGE,
+    ): List<UIMessagePart> {
         if (carried != null) {
             grounded = carried
-            return renderStaleState(carried)
+            return listOf(UIMessagePart.Text(redecidePreamble + "\n\n" + renderCompactSnapshot(carried)))
         }
         val fresh = captureAuthorizedScreen(rawArgs = "<act-reground>")
         return if (fresh != null) {
-            listOf(UIMessagePart.Text(ACT_STALE_REDECIDE_MESSAGE + "\n\n" + renderCompactSnapshot(fresh)))
+            listOf(UIMessagePart.Text(redecidePreamble + "\n\n" + renderCompactSnapshot(fresh)))
         } else {
             listOf(UIMessagePart.Text(ACT_STALE_MESSAGE))
         }
@@ -356,7 +359,8 @@ fun getUiAutomationTools(
                     }
                     is ActOutcome.Denied -> listOf(UIMessagePart.Text(ACT_DENIED_MESSAGE))
                     is ActOutcome.StaleState -> {
-                        staleResponse(outcome.snapshot)
+                        // Global nav has no target element — use the navigation-specific re-decide text.
+                        staleResponse(outcome.snapshot, ACT_STALE_GLOBAL_REDECIDE_MESSAGE)
                     }
                 }
             },
@@ -558,32 +562,13 @@ internal const val ACT_DENIED_MESSAGE =
 /**
  * The grounding moved under the act (the screen changed since the last ui_observe, or the bound
  * target did not re-resolve to exactly one live node). The model must re-observe and re-decide —
- * NEVER replay the stale act. Vague (no internal reason leaked). Used when [ActOutcome.StaleState]
- * carried NO fresh snapshot; when it did, [renderStaleState] surfaces the fresh table instead.
+ * NEVER replay the stale act. Vague (no internal reason leaked). Used by `staleResponse` ONLY as the
+ * last-resort text when even the authorized re-capture is denied; on every other stale the fresh
+ * current screen is folded into the response instead.
  */
 internal const val ACT_STALE_MESSAGE =
     "The screen changed since your last ui_observe, so that action was not applied. Call ui_observe " +
         "again to get a fresh snapshot, then decide the next step from the current screen."
-
-/**
- * Render a stale-state outcome to tool parts. When the backend captured a FRESH snapshot at the
- * binding mismatch ([snapshot] != null) the tool layer emits a vague re-decide preamble followed by
- * the rendered current screen, so the model can re-decide from the live screen instead of a blind
- * re-observe. The caller is responsible for re-grounding (closing over `grounded`) on a non-null
- * snapshot; this helper only renders.
- *
- * When [snapshot] is null (host-foreground pause, surface switch off the authorized target, missing
- * tid, or the framework refused the verb) the renderer emits only the vague re-observe text — there
- * is no informative current screen to render.
- */
-internal fun renderStaleState(snapshot: UiSnapshot?): List<UIMessagePart.Text> {
-    val current = snapshot ?: return listOf(UIMessagePart.Text(ACT_STALE_MESSAGE))
-    return listOf(
-        UIMessagePart.Text(
-            ACT_STALE_REDECIDE_MESSAGE + "\n\n" + renderCompactSnapshot(current),
-        ),
-    )
-}
 
 /**
  * A stale-state outcome that CARRIES a fresh snapshot: the bound target did not re-resolve to
@@ -595,6 +580,17 @@ internal const val ACT_STALE_REDECIDE_MESSAGE =
     "The element you tried to act on did not match exactly one live element on the current screen, " +
         "so that action was not applied. A fresh snapshot of the current screen follows — re-decide " +
         "the next step from it (do not replay the previous action)."
+
+/**
+ * The global-nav (ui_global) analogue of [ACT_STALE_REDECIDE_MESSAGE]. A global nav has NO target
+ * element, so the element-mismatch wording is wrong and misleads the model into hunting for a tid.
+ * Used when a BACK/HOME/RECENTS left the screen on a different surface than expected (it may have
+ * already completed, or moved to another app) — the current screen follows, re-decide from it.
+ */
+internal const val ACT_STALE_GLOBAL_REDECIDE_MESSAGE =
+    "The navigation did not leave the screen in the expected state — it may have already completed, " +
+        "or moved to a different surface. A fresh snapshot of the current screen follows — re-decide " +
+        "the next step from it (do not blindly repeat the navigation)."
 
 /**
  * Why a `ui_observe` call returned nothing. Self-sufficient text (the model never sees the
