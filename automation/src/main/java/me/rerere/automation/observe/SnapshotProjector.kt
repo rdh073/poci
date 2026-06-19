@@ -34,7 +34,13 @@ import java.security.MessageDigest
  * exposed so a real backend's live dispatch walk re-computes the SAME [UiTarget] fields and matches
  * a [TargetBinding] byte-for-byte (the load-bearing parity for atomic fresh resolve + dispatch).
  */
-class SnapshotProjector {
+/**
+ * @param hostPackage the host app's REAL application id, used for the host-exclusion (P2/P12). It MUST
+ *   be the running package — which on a debug build carries the `.debug` suffix
+ *   (`me.rerere.rikkahub.debug`), NOT the base id — or the agent would observe/act on its own UI.
+ *   Defaults to the base id for tests / default construction; the app injects its BuildConfig id.
+ */
+class SnapshotProjector(private val hostPackage: String = HOST_PACKAGE) {
 
     /**
      * @param includeHost when true (YOLO only), the host self-exclusion is lifted: the host may be the
@@ -42,10 +48,10 @@ class SnapshotProjector {
      *   Default false preserves the P2/P12 host exclusion for every scoped (non-YOLO) caller.
      */
     fun project(tree: RawTree, allowedPackages: Set<String>, includeHost: Boolean = false): UiSnapshot {
-        val foregroundIsHost = !includeHost && tree.foregroundPkg == HOST_PACKAGE
+        val foregroundIsHost = !includeHost && tree.foregroundPkg == hostPackage
 
         // Windows the model may see: never the host (unless includeHost), never a secure window's contents.
-        val visibleWindows = tree.windows.filter { isWindowEligible(it.pkg, it.systemWindow, allowedPackages, includeHost) }
+        val visibleWindows = tree.windows.filter { isWindowEligible(it.pkg, it.systemWindow, allowedPackages, includeHost, hostPackage) }
 
         val screenState = when {
             foregroundIsHost -> ScreenState.FOREGROUND_IS_HOST
@@ -131,8 +137,9 @@ class SnapshotProjector {
             systemWindow: Boolean,
             allowedPackages: Set<String>,
             includeHost: Boolean = false,
+            hostPackage: String = HOST_PACKAGE,
         ): Boolean =
-            (includeHost || pkg != HOST_PACKAGE) && (pkg in allowedPackages || systemWindow)
+            (includeHost || pkg != hostPackage) && (pkg in allowedPackages || systemWindow)
 
         /** The projection rule (design §4): a node is a target iff `(visible && hasArea) || hasId || hasText`. */
         fun isTarget(node: RawNode): Boolean =

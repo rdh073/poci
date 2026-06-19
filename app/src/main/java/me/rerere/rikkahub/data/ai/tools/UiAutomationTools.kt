@@ -146,6 +146,56 @@ fun getUiAutomationTools(
         return listOf(UIMessagePart.Text(ACT_DENIED_MESSAGE))
     }
 
+    // Authorized capture of the CURRENT foreground screen, re-grounding `grounded` on success. This is
+    // the single observe authorize+capture+bind path (S2 + the TOCTOU surface-bind), shared by
+    // `ui_observe` AND the act tools' stale re-ground (so a stale act folds the fresh screen into its
+    // own result — the model never needs a separate ui_observe round-trip after an act). Returns the
+    // bound snapshot, or null when the guard DENYs / a revoke fires / the live foreground is an app the
+    // capability never authorized (fail-closed: no unauthorized surface is ever disclosed).
+    suspend fun captureAuthorizedScreen(rawArgs: String): UiSnapshot? {
+        val authorizedPkg = foregroundPkg()
+        val decision = guard.authorize(
+            AuthRequest(verb = Verb.OBSERVE, targetPkg = authorizedPkg, rawArgs = rawArgs),
+        )
+        if (decision == Decision.DENY) {
+            return null
+        }
+        val job = currentCoroutineContext()[Job]
+        return guard.guardInFlight(
+            cancel = { job?.cancel(CancellationException("automation revoked")) },
+            onAlreadyRevoked = { null },
+            block = {
+                val snapshot = core.observe(setOfNotNull(authorizedPkg), guard.includeHost)
+                // TOCTOU surface bind: if the foreground switched since the authorize-read, the capture
+                // is an app the guard never admitted — drop it rather than disclose it.
+                if (snapshot.foregroundPkg != authorizedPkg) {
+                    null
+                } else {
+                    grounded = snapshot
+                    snapshot
+                }
+            },
+        )
+    }
+
+    // A stale act response that ALWAYS carries the current screen so the model re-decides in ONE step
+    // (no "act -> stale -> ui_observe -> act" round-trip). When the backend already captured the fresh
+    // screen (same authorized surface) use it; otherwise (surface switch / framework refusal / missing
+    // tid) fold in an authorized re-capture. Only when even that is denied does the bare re-observe text
+    // remain — there is genuinely no authorized screen to show.
+    suspend fun staleResponse(carried: UiSnapshot?): List<UIMessagePart> {
+        if (carried != null) {
+            grounded = carried
+            return renderStaleState(carried)
+        }
+        val fresh = captureAuthorizedScreen(rawArgs = "<act-reground>")
+        return if (fresh != null) {
+            listOf(UIMessagePart.Text(ACT_STALE_REDECIDE_MESSAGE + "\n\n" + renderCompactSnapshot(fresh)))
+        } else {
+            listOf(UIMessagePart.Text(ACT_STALE_MESSAGE))
+        }
+    }
+
     return listOf(
         Tool(
             name = UI_OBSERVE_TOOL_NAME,
@@ -160,50 +210,25 @@ fun getUiAutomationTools(
             },
             needsApproval = false,
             execute = { args ->
-                // S2: authorize BEFORE the backend. Read the foreground package first so the guard
-                // decides on the real target (not the post-observe one). Authority is the closed-over
-                // guard, never anything in `args`.
-                val authorizedPkg = foregroundPkg()
-                val request = AuthRequest(
-                    verb = Verb.OBSERVE,
-                    targetPkg = authorizedPkg,
-                    // ui_observe is a read: no sink, no sensitive/system write target.
-                    malformed = args !is JsonObject,
-                    rawArgs = args.toString(),
-                )
-                if (guard.authorize(request) == Decision.DENY) {
+                // A non-object arg is malformed (P24/P25): an audited DENY (mirrors auditMalformedAct
+                // but for OBSERVE), so the fail-closed refusal still leaves its one ledger entry.
+                if (args !is JsonObject) {
+                    guard.authorize(
+                        AuthRequest(
+                            verb = Verb.OBSERVE,
+                            targetPkg = foregroundPkg(),
+                            malformed = true,
+                            rawArgs = args.toString(),
+                        ),
+                    )
                     listOf(UIMessagePart.Text(OBSERVE_DENIED_MESSAGE))
                 } else {
-                    // I9 (revoke cancels in-flight) + close the authorize→observe window: route the
-                    // backend capture through the guard's shared RevocationToken. A concurrent
-                    // revoke()/kill-switch cancels the parked capture via the owning Job, and a
-                    // revoke that fires between authorize() and here lands in onAlreadyRevoked so the
-                    // backend is never hit. Mirrors the kernel's proven P20.
-                    val job = currentCoroutineContext()[Job]
-                    guard.guardInFlight(
-                        cancel = { job?.cancel(CancellationException("automation revoked")) },
-                        onAlreadyRevoked = { listOf(UIMessagePart.Text(OBSERVE_DENIED_MESSAGE)) },
-                        block = {
-                            val snapshot = core.observe(setOfNotNull(authorizedPkg), guard.includeHost)
-                            // TOCTOU on the authorization target (gate finding): the foreground app
-                            // may have switched between the authorize-read above and this capture.
-                            // Bind the captured snapshot to the authorized package — if they differ,
-                            // we captured an app the guard never admitted, so deny rather than
-                            // disclose it (the projector still stripped host/password content, but an
-                            // unauthorized foreign app must not be surfaced at all).
-                            if (snapshot.foregroundPkg != authorizedPkg) {
-                                listOf(UIMessagePart.Text(OBSERVE_DENIED_MESSAGE))
-                            } else {
-                                // Ground the act tools on this authorized, freshly-captured snapshot:
-                                // the act tools resolve their selector against it into a decision-time
-                                // TargetBinding; the backend then fresh-resolves that binding and
-                                // dispatches atomically (no whole-snapshot seq/hash gate — #198 slice 8
-                                // superseded by the eyes-open binding redesign).
-                                grounded = snapshot
-                                listOf(UIMessagePart.Text(renderCompactSnapshot(snapshot)))
-                            }
-                        },
-                    )
+                    // Well-formed: the shared authorize+capture+bind path (S2, revoke-cancellable,
+                    // TOCTOU surface-bind) re-grounds the act tools on the fresh snapshot. Null ⇒
+                    // denied / revoked / unauthorized foreground ⇒ the vague deny text.
+                    captureAuthorizedScreen(rawArgs = args.toString())
+                        ?.let { listOf(UIMessagePart.Text(renderCompactSnapshot(it))) }
+                        ?: listOf(UIMessagePart.Text(OBSERVE_DENIED_MESSAGE))
                 }
             },
         ),
@@ -213,7 +238,8 @@ fun getUiAutomationTools(
                 "or backward. You MUST call ui_observe first this turn — a target id is only valid " +
                 "for the snapshot it appears in. Select the element by its tid (from the latest " +
                 "ui_observe table), by its visible text, or by its semantic key. Returns a fresh " +
-                "ui_observe-style snapshot after the scroll; re-read it before the next step.",
+                "ui_observe-style snapshot after the scroll — this IS your fresh observation, so do " +
+                "NOT call ui_observe again afterward; read this result and pick the next target from it.",
             parameters = {
                 InputSchema.Obj(
                     properties = buildJsonObject {
@@ -276,8 +302,7 @@ fun getUiAutomationTools(
                         // Re-ground on the fresh snapshot the backend captured at the binding mismatch,
                         // so the model can re-decide from the live screen (and the next act this turn
                         // resolves against the current screen, not the stale grounding).
-                        if (outcome.snapshot != null) grounded = outcome.snapshot
-                        renderStaleState(outcome.snapshot)
+                        staleResponse(outcome.snapshot)
                     }
                 }
             },
@@ -286,7 +311,8 @@ fun getUiAutomationTools(
             name = UI_GLOBAL_TOOL_NAME,
             description = "Perform a global navigation on the device: go back, go to the home " +
                 "screen, or open recent apps. You MUST call ui_observe first this turn. Returns a " +
-                "fresh ui_observe-style snapshot after the navigation; re-read it before the next step.",
+                "fresh ui_observe-style snapshot after the navigation — this IS your fresh observation, " +
+                "so do NOT call ui_observe again afterward; read this result and decide from it.",
             parameters = {
                 InputSchema.Obj(
                     properties = buildJsonObject {
@@ -330,8 +356,7 @@ fun getUiAutomationTools(
                     }
                     is ActOutcome.Denied -> listOf(UIMessagePart.Text(ACT_DENIED_MESSAGE))
                     is ActOutcome.StaleState -> {
-                        if (outcome.snapshot != null) grounded = outcome.snapshot
-                        renderStaleState(outcome.snapshot)
+                        staleResponse(outcome.snapshot)
                     }
                 }
             },
@@ -342,8 +367,9 @@ fun getUiAutomationTools(
                 "replacing its current contents. You MUST call ui_observe first this turn — a target " +
                 "id is only valid for the snapshot it appears in. Select the field by its tid (from " +
                 "the latest ui_observe table), by its form key, by its semantic key, or by its " +
-                "visible text. Returns a fresh ui_observe-style snapshot after the edit; re-read it " +
-                "before the next step.",
+                "visible text. Returns a fresh ui_observe-style snapshot after the edit — this IS your " +
+                "fresh observation, so do NOT call ui_observe again afterward; read this result. The " +
+                "field's new value is shown in that snapshot, so trust it landed rather than re-typing.",
             parameters = {
                 InputSchema.Obj(
                     properties = buildJsonObject {
@@ -406,8 +432,7 @@ fun getUiAutomationTools(
                     }
                     is ActOutcome.Denied -> listOf(UIMessagePart.Text(ACT_DENIED_MESSAGE))
                     is ActOutcome.StaleState -> {
-                        if (outcome.snapshot != null) grounded = outcome.snapshot
-                        renderStaleState(outcome.snapshot)
+                        staleResponse(outcome.snapshot)
                     }
                 }
             },
@@ -418,7 +443,9 @@ fun getUiAutomationTools(
                 "MUST call ui_observe first this turn — a target id is only valid for the snapshot it " +
                 "appears in. Select the element by its tid (from the latest ui_observe table), by its " +
                 "visible text, or by its semantic key. Returns a fresh ui_observe-style snapshot after " +
-                "the tap; re-read it before the next step.",
+                "the tap — this IS your fresh observation, so do NOT call ui_observe again afterward; " +
+                "read this result and pick the next target from it. Tip: select a node that shows the " +
+                "CLICK flag (a bare text label often is not tappable — tap its clickable row instead).",
             parameters = {
                 InputSchema.Obj(
                     properties = buildJsonObject {
@@ -467,8 +494,7 @@ fun getUiAutomationTools(
                     }
                     is ActOutcome.Denied -> listOf(UIMessagePart.Text(ACT_DENIED_MESSAGE))
                     is ActOutcome.StaleState -> {
-                        if (outcome.snapshot != null) grounded = outcome.snapshot
-                        renderStaleState(outcome.snapshot)
+                        staleResponse(outcome.snapshot)
                     }
                 }
             },
