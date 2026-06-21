@@ -10,22 +10,31 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
@@ -37,26 +46,34 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.composables.icons.lucide.LayoutGrid
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Trash2
 import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.Folder01
+import me.rerere.hugeicons.stroke.LeftToRightListBullet
+import me.rerere.hugeicons.stroke.MoreVertical
 import me.rerere.hugeicons.stroke.Refresh01
 import me.rerere.hugeicons.stroke.Settings03
 import me.rerere.rikkahub.R
@@ -97,6 +114,9 @@ fun WorkspaceDetailPage(id: String) {
 
     var showCreateMenu by remember { mutableStateOf(false) }
     var createKind by remember { mutableStateOf<CreateKind?>(null) }
+    var viewMode by rememberSaveable { mutableStateOf(FileViewMode.LIST) }
+    var deleteTarget by remember { mutableStateOf<WorkspaceFileEntry?>(null) }
+    val fileView by vm.fileView.collectAsStateWithLifecycle()
     // New file/folder is a FILES-area, files-tab affordance only (the LINUX rootfs is installer-managed).
     val canCreate = pagerState.currentPage == 1 && state.area == WorkspaceStorageArea.FILES
 
@@ -181,9 +201,15 @@ fun WorkspaceDetailPage(id: String) {
 
                 1 -> WorkspaceFilesPage(
                     state = state,
+                    viewMode = viewMode,
+                    onToggleViewMode = {
+                        viewMode = if (viewMode == FileViewMode.LIST) FileViewMode.GRID else FileViewMode.LIST
+                    },
                     onSelectArea = vm::selectArea,
                     onBrowseTo = vm::browseTo,
                     onOpen = vm::open,
+                    onView = vm::openFile,
+                    onDelete = { deleteTarget = it },
                     onSetProjectDir = vm::setCurrentAsProjectDir,
                     onClearProjectDir = vm::clearProjectDir,
                 )
@@ -203,6 +229,41 @@ fun WorkspaceDetailPage(id: String) {
             },
             onDismiss = { createKind = null },
         )
+    }
+
+    deleteTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete ${target.name}?") },
+            text = {
+                Text(
+                    if (target.isDirectory) {
+                        "This folder and everything inside it will be permanently deleted."
+                    } else {
+                        "This file will be permanently deleted."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.deleteEntry(target)
+                        deleteTarget = null
+                    },
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteTarget = null }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
+    fileView?.let { view ->
+        FileViewerSheet(state = view, onDismiss = vm::closeFile)
     }
 }
 
@@ -399,37 +460,59 @@ private fun WorkspaceInfoRow(
     }
 }
 
+private enum class FileViewMode { LIST, GRID }
+
 @Composable
 private fun WorkspaceFilesPage(
     state: WorkspaceDetailState,
+    viewMode: FileViewMode,
+    onToggleViewMode: () -> Unit,
     onSelectArea: (WorkspaceStorageArea) -> Unit,
     onBrowseTo: (String) -> Unit,
     onOpen: (WorkspaceFileEntry) -> Unit,
+    onView: (WorkspaceFileEntry) -> Unit,
+    onDelete: (WorkspaceFileEntry) -> Unit,
     onSetProjectDir: () -> Unit,
     onClearProjectDir: () -> Unit,
 ) {
-    LazyColumn(
+    val isFiles = state.area == WorkspaceStorageArea.FILES
+    LazyVerticalGrid(
+        // Fixed(1) renders the list rows full-width; Adaptive packs compact tiles for the grid view.
+        columns = if (viewMode == FileViewMode.GRID) GridCells.Adaptive(108.dp) else GridCells.Fixed(1),
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item {
-            WorkspaceAreaSelector(
-                selected = state.area,
-                onSelected = onSelectArea,
-            )
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Box(modifier = Modifier.weight(1f)) {
+                    WorkspaceAreaSelector(selected = state.area, onSelected = onSelectArea)
+                }
+                IconButton(onClick = onToggleViewMode) {
+                    Icon(
+                        imageVector = if (viewMode == FileViewMode.LIST) {
+                            Lucide.LayoutGrid
+                        } else {
+                            HugeIcons.LeftToRightListBullet
+                        },
+                        contentDescription = "Toggle view",
+                    )
+                }
+            }
         }
 
-        item {
-            WorkspaceBreadcrumb(
-                path = state.path,
-                onNavigate = onBrowseTo,
-            )
+        item(span = { GridItemSpan(maxLineSpan) }) {
+            WorkspaceBreadcrumb(path = state.path, onNavigate = onBrowseTo)
         }
 
         // Project directory is a FILES-area concept (the agent's cwd seed); hide it for the LINUX rootfs.
-        if (state.area == WorkspaceStorageArea.FILES) {
-            item {
+        if (isFiles) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
                 ProjectDirBar(
                     currentPath = state.path,
                     projectDir = state.workspace?.workingDir.orEmpty(),
@@ -440,22 +523,24 @@ private fun WorkspaceFilesPage(
         }
 
         if (state.error != null) {
-            item {
+            item(span = { GridItemSpan(maxLineSpan) }) {
                 ErrorCard(stringResource(R.string.workspace_files_load_error))
             }
         }
 
         if (!state.loading && state.entries.isEmpty() && state.error == null) {
-            item {
+            item(span = { GridItemSpan(maxLineSpan) }) {
                 EmptyDirectoryState()
             }
         }
 
-        items(state.entries, key = { "${state.area.name}:${it.path}" }) { entry ->
-            WorkspaceFileCard(
-                entry = entry,
-                onOpen = { onOpen(entry) },
-            )
+        gridItems(state.entries, key = { "${state.area.name}:${it.path}" }) { entry ->
+            val onActivate = { if (entry.isDirectory) onOpen(entry) else onView(entry) }
+            if (viewMode == FileViewMode.GRID) {
+                WorkspaceFileTile(entry = entry, onOpen = onActivate, onDelete = { onDelete(entry) })
+            } else {
+                WorkspaceFileCard(entry = entry, onOpen = onActivate, onDelete = { onDelete(entry) })
+            }
         }
     }
 }
@@ -590,17 +675,18 @@ private fun ProjectDirBar(
 private fun WorkspaceFileCard(
     entry: WorkspaceFileEntry,
     onOpen: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .then(if (entry.isDirectory) Modifier.clickable(onClick = onOpen) else Modifier),
+            .clickable(onClick = onOpen),
         colors = CustomColors.cardColorsOnSurfaceContainer,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 16.dp),
+                .padding(start = 16.dp, top = 6.dp, bottom = 6.dp, end = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
@@ -628,6 +714,127 @@ private fun WorkspaceFileCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+            }
+            FileEntryMenu(onDelete = onDelete)
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceFileTile(
+    entry: WorkspaceFileEntry,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Box {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpen),
+            colors = CustomColors.cardColorsOnSurfaceContainer,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 16.dp, horizontal = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = if (entry.isDirectory) HugeIcons.Folder01 else HugeIcons.File02,
+                    contentDescription = null,
+                    modifier = Modifier.size(36.dp),
+                    tint = fileTint(entry),
+                )
+                Text(
+                    text = entry.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                )
+            }
+        }
+        FileEntryMenu(
+            onDelete = onDelete,
+            modifier = Modifier.align(Alignment.TopEnd),
+        )
+    }
+}
+
+@Composable
+private fun FileEntryMenu(
+    onDelete: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        IconButton(onClick = { expanded = true }) {
+            Icon(
+                HugeIcons.MoreVertical,
+                contentDescription = "More",
+                modifier = Modifier.size(18.dp),
+            )
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                leadingIcon = {
+                    Icon(Lucide.Trash2, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                },
+                onClick = {
+                    expanded = false
+                    onDelete()
+                },
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FileViewerSheet(
+    state: FileViewState,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = state.name,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            when {
+                state.loading -> Text(
+                    text = "Loading…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                state.isBinary -> Text(
+                    text = "Binary file — not viewable as text.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                else -> SelectionContainer {
+                    Text(
+                        text = state.content.orEmpty().ifBlank { "(empty file)" },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 480.dp)
+                            .verticalScroll(rememberScrollState()),
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    )
+                }
             }
         }
     }
