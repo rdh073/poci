@@ -89,17 +89,20 @@ class WorkspaceFileSystem(
     fun move(root: File, source: String, target: String, overwrite: Boolean = false): WorkspaceFileEntry {
         require(source.isNotBlank() && source != ".") { "Refusing to move workspace root" }
         val rootFile = root.canonicalFile
-        val sourceFile = resolvePath(root, source)
-        val targetFile = resolvePath(root, target)
-        requireNotRoot(sourceFile, rootFile)
-        requireNotRoot(targetFile, rootFile)
-        require(sourceFile.exists()) { "Source does not exist: $source" }
-        if (targetFile.exists()) {
+        // Resolve leaves without following them, so moving/overwriting a symlink entry acts on the link
+        // itself — never on what it points at. Entries report logical paths (see relativePath), so a
+        // listed `link -> real` round-tripped into move must relocate `link`, not `real`.
+        val sourceFile = resolveLeafNoFollow(root, source)
+        val targetFile = resolveLeafNoFollow(root, target)
+        val sourcePath = sourceFile.toPath()
+        require(Files.exists(sourcePath, LinkOption.NOFOLLOW_LINKS)) { "Source does not exist: $source" }
+        val targetPath = targetFile.toPath()
+        if (Files.exists(targetPath, LinkOption.NOFOLLOW_LINKS)) {
             require(overwrite) { "Target already exists: $target" }
-            if (targetFile.isDirectory) {
-                deleteRecursivelyNoFollow(rootFile, targetFile)
-            } else {
-                targetFile.delete()
+            when {
+                Files.isSymbolicLink(targetPath) -> Files.delete(targetPath)
+                targetFile.isDirectory -> deleteRecursivelyNoFollow(rootFile, targetFile)
+                else -> targetFile.delete()
             }
         }
         targetFile.parentFile?.mkdirs()
@@ -116,7 +119,7 @@ class WorkspaceFileSystem(
         val matcher = FileSystems.getDefault().getPathMatcher("glob:$pattern")
         return walk(start) { paths ->
             paths
-                .filter { Files.isRegularFile(it) || Files.isDirectory(it) }
+                .filter { (Files.isRegularFile(it) || Files.isDirectory(it)) && staysWithinRoot(it, root) }
                 .filter { matcher.matches(root.toPath().relativize(it).normalizeForMatch()) }
                 .take(config.maxListEntries)
                 .map { it.toFile().toEntry(root) }
@@ -144,7 +147,7 @@ class WorkspaceFileSystem(
         val results = mutableListOf<WorkspaceSearchMatch>()
         walk(start) { paths ->
             paths
-                .filter { Files.isRegularFile(it) }
+                .filter { Files.isRegularFile(it) && staysWithinRoot(it, root) }
                 .forEach { path ->
                     if (results.size >= config.maxSearchResults) return@forEach
                     if (includeMatcher != null &&
@@ -206,6 +209,19 @@ class WorkspaceFileSystem(
             },
         )
         return true
+    }
+
+    // True if a walked entry, with all symlinks resolved, stays within the workspace root. The
+    // walk-based readers (glob/grep) surface raw filesystem entries and bypass resolvePath's per-leaf
+    // containment, so without this a leaf symlink pointing outside the root would be listed or read
+    // and — because entries now report logical (in-root) paths — masked as in-root content. Files.walk
+    // never descends symlinked dirs, so only a leaf symlink can escape; non-symlinks are always in-root
+    // and skip the extra realpath syscall.
+    private fun staysWithinRoot(candidate: Path, root: File): Boolean {
+        if (!Files.isSymbolicLink(candidate)) return true
+        val real = runCatching { candidate.toRealPath() }.getOrNull() ?: return false
+        val rootReal = root.canonicalFile.toPath()
+        return real == rootReal || real.startsWith(rootReal)
     }
 
     private fun requirePathUnderRoot(candidate: Path, rootPath: Path) {
