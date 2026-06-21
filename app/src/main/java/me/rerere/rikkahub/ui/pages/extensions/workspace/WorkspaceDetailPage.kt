@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -22,7 +21,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -59,7 +57,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -81,6 +78,7 @@ import me.rerere.rikkahub.ui.components.ui.SegmentedButtonLabel
 import me.rerere.rikkahub.data.ai.tools.resolveWorkspaceToolApproval
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.ui.components.nav.BackButton
+import me.rerere.rikkahub.ui.components.richtext.HighlightCodeBlock
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.workspace.WorkspaceFileEntry
@@ -803,7 +801,8 @@ private fun FileViewerSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 24.dp),
+                .padding(bottom = 24.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
@@ -825,19 +824,53 @@ private fun FileViewerSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
 
-                else -> SelectionContainer {
-                    Text(
-                        text = state.content.orEmpty().ifBlank { "(empty file)" },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 480.dp)
-                            .verticalScroll(rememberScrollState()),
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    )
-                }
+                state.content.isNullOrEmpty() -> Text(
+                    text = "(empty file)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                // Reuse the app's Prism-based code block so code files get syntax colors (it also brings
+                // line numbers + copy + collapse). An unsupported language degrades to plain text, the
+                // same as a fenced code block with an unknown language in chat.
+                else -> HighlightCodeBlock(
+                    code = state.content,
+                    language = prismLanguageFor(state.name),
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }
+}
+
+/** Map a file name to a Prism language id for syntax highlighting; unknown → plaintext (renders plain). */
+private fun prismLanguageFor(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
+    "kt", "kts" -> "kotlin"
+    "java" -> "java"
+    "js", "mjs", "cjs" -> "javascript"
+    "ts" -> "typescript"
+    "jsx" -> "jsx"
+    "tsx" -> "tsx"
+    "py" -> "python"
+    "rb" -> "ruby"
+    "go" -> "go"
+    "rs" -> "rust"
+    "c", "h" -> "c"
+    "cpp", "cc", "cxx", "hpp" -> "cpp"
+    "cs" -> "csharp"
+    "swift" -> "swift"
+    "sh", "bash", "zsh" -> "bash"
+    "json" -> "json"
+    "yaml", "yml" -> "yaml"
+    "toml" -> "toml"
+    "xml", "html", "htm", "svg" -> "markup"
+    "css" -> "css"
+    "scss", "sass" -> "scss"
+    "sql" -> "sql"
+    "md", "markdown" -> "markdown"
+    "gradle" -> "groovy"
+    "properties", "ini", "cfg", "conf", "env" -> "properties"
+    else -> "plaintext"
 }
 
 @Composable
