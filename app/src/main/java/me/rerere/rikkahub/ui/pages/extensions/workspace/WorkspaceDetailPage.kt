@@ -2,6 +2,7 @@ package me.rerere.rikkahub.ui.pages.extensions.workspace
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,31 +16,45 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
-import me.rerere.hugeicons.stroke.ArrowTurnBackward
+import me.rerere.hugeicons.stroke.Add01
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.Refresh01
@@ -49,22 +64,41 @@ import me.rerere.rikkahub.ui.components.ui.SegmentedButtonLabel
 import me.rerere.rikkahub.data.ai.tools.resolveWorkspaceToolApproval
 import me.rerere.rikkahub.data.db.entity.WorkspaceEntity
 import me.rerere.rikkahub.ui.components.nav.BackButton
+import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.CustomColors
 import me.rerere.workspace.WorkspaceFileEntry
 import me.rerere.workspace.WorkspaceStorageArea
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 
+private enum class CreateKind { FILE, FOLDER }
+
 @Composable
 fun WorkspaceDetailPage(id: String) {
     val vm: WorkspaceDetailVM = koinViewModel(parameters = { parametersOf(id) })
     val state by vm.state.collectAsStateWithLifecycle()
+    val actionError by vm.actionError.collectAsStateWithLifecycle()
     val pagerState = rememberPagerState { 2 }
     val scope = rememberCoroutineScope()
+    val toaster = LocalToaster.current
 
     BackHandler(enabled = pagerState.currentPage == 1 && state.path.isNotBlank()) {
         vm.goUp()
     }
+
+    // A failed file action (e.g. "folder already exists") surfaces as a toast, then is consumed so it
+    // doesn't re-fire on recomposition.
+    LaunchedEffect(actionError) {
+        actionError?.let {
+            toaster.show(it, type = ToastType.Error)
+            vm.dismissActionError()
+        }
+    }
+
+    var showCreateMenu by remember { mutableStateOf(false) }
+    var createKind by remember { mutableStateOf<CreateKind?>(null) }
+    // New file/folder is a FILES-area, files-tab affordance only (the LINUX rootfs is installer-managed).
+    val canCreate = pagerState.currentPage == 1 && state.area == WorkspaceStorageArea.FILES
 
     Scaffold(
         topBar = {
@@ -101,6 +135,36 @@ fun WorkspaceDetailPage(id: String) {
                 )
             }
         },
+        floatingActionButton = {
+            if (canCreate) {
+                Box {
+                    FloatingActionButton(onClick = { showCreateMenu = true }) {
+                        Icon(HugeIcons.Add01, contentDescription = "Create")
+                    }
+                    DropdownMenu(
+                        expanded = showCreateMenu,
+                        onDismissRequest = { showCreateMenu = false },
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("New file") },
+                            leadingIcon = { Icon(HugeIcons.File02, contentDescription = null) },
+                            onClick = {
+                                showCreateMenu = false
+                                createKind = CreateKind.FILE
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("New folder") },
+                            leadingIcon = { Icon(HugeIcons.Folder01, contentDescription = null) },
+                            onClick = {
+                                showCreateMenu = false
+                                createKind = CreateKind.FOLDER
+                            },
+                        )
+                    }
+                }
+            }
+        },
         containerColor = CustomColors.topBarColors.containerColor,
     ) { innerPadding ->
         HorizontalPager(
@@ -118,12 +182,64 @@ fun WorkspaceDetailPage(id: String) {
                 1 -> WorkspaceFilesPage(
                     state = state,
                     onSelectArea = vm::selectArea,
-                    onGoUp = vm::goUp,
+                    onBrowseTo = vm::browseTo,
                     onOpen = vm::open,
+                    onSetProjectDir = vm::setCurrentAsProjectDir,
+                    onClearProjectDir = vm::clearProjectDir,
                 )
             }
         }
     }
+
+    createKind?.let { kind ->
+        CreateEntryDialog(
+            kind = kind,
+            onConfirm = { name ->
+                when (kind) {
+                    CreateKind.FILE -> vm.createFile(name)
+                    CreateKind.FOLDER -> vm.createFolder(name)
+                }
+                createKind = null
+            },
+            onDismiss = { createKind = null },
+        )
+    }
+}
+
+@Composable
+private fun CreateEntryDialog(
+    kind: CreateKind,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var name by remember { mutableStateOf("") }
+    val title = if (kind == CreateKind.FOLDER) "New folder" else "New file"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                singleLine = true,
+                label = { Text(if (kind == CreateKind.FOLDER) "Folder name" else "File name") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(
+                enabled = name.isNotBlank(),
+                onClick = { onConfirm(name.trim()) },
+            ) {
+                Text(stringResource(R.string.confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.cancel))
+            }
+        },
+    )
 }
 
 @Composable
@@ -287,12 +403,14 @@ private fun WorkspaceInfoRow(
 private fun WorkspaceFilesPage(
     state: WorkspaceDetailState,
     onSelectArea: (WorkspaceStorageArea) -> Unit,
-    onGoUp: () -> Unit,
+    onBrowseTo: (String) -> Unit,
     onOpen: (WorkspaceFileEntry) -> Unit,
+    onSetProjectDir: () -> Unit,
+    onClearProjectDir: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
@@ -303,11 +421,22 @@ private fun WorkspaceFilesPage(
         }
 
         item {
-            WorkspacePathBar(
+            WorkspaceBreadcrumb(
                 path = state.path,
-                canGoUp = state.path.isNotBlank(),
-                onGoUp = onGoUp,
+                onNavigate = onBrowseTo,
             )
+        }
+
+        // Project directory is a FILES-area concept (the agent's cwd seed); hide it for the LINUX rootfs.
+        if (state.area == WorkspaceStorageArea.FILES) {
+            item {
+                ProjectDirBar(
+                    currentPath = state.path,
+                    projectDir = state.workspace?.workingDir.orEmpty(),
+                    onSet = onSetProjectDir,
+                    onClear = onClearProjectDir,
+                )
+            }
         }
 
         if (state.error != null) {
@@ -354,30 +483,106 @@ private fun WorkspaceAreaSelector(
 }
 
 @Composable
-private fun WorkspacePathBar(
+private fun WorkspaceBreadcrumb(
     path: String,
-    canGoUp: Boolean,
-    onGoUp: () -> Unit,
+    onNavigate: (String) -> Unit,
 ) {
+    val segments = path.split('/').filter { it.isNotBlank() }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState()),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        IconButton(
-            enabled = canGoUp,
-            onClick = onGoUp,
-        ) {
-            Icon(HugeIcons.ArrowTurnBackward, contentDescription = null)
-        }
-        Text(
-            text = path.ifBlank { stringResource(R.string.workspace_files_root_path) },
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+        // Root crumb: navigable from any sub-path.
+        BreadcrumbCrumb(
+            label = stringResource(R.string.workspace_files_root_path),
+            enabled = path.isNotBlank(),
+            onClick = { onNavigate("") },
         )
+        segments.forEachIndexed { index, segment ->
+            Text(
+                text = " › ",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val target = segments.take(index + 1).joinToString("/")
+            BreadcrumbCrumb(
+                label = segment,
+                enabled = index < segments.lastIndex,
+                onClick = { onNavigate(target) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun BreadcrumbCrumb(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+        modifier = if (enabled) {
+            Modifier
+                .clickable(onClick = onClick)
+                .padding(vertical = 6.dp, horizontal = 2.dp)
+        } else {
+            Modifier.padding(vertical = 6.dp, horizontal = 2.dp)
+        },
+    )
+}
+
+@Composable
+private fun ProjectDirBar(
+    currentPath: String,
+    projectDir: String,
+    onSet: () -> Unit,
+    onClear: () -> Unit,
+) {
+    val isCurrent = currentPath == projectDir
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CustomColors.cardColorsOnSurfaceContainer,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = "Project directory",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = (if (isCurrent) "✓ " else "") +
+                        projectDir.ifBlank { "Files root (default)" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (!isCurrent) {
+                FilledTonalButton(onClick = onSet) {
+                    Text("Set here")
+                }
+            } else if (projectDir.isNotBlank()) {
+                TextButton(onClick = onClear) {
+                    Text("Reset")
+                }
+            }
+        }
     }
 }
 
@@ -402,11 +607,7 @@ private fun WorkspaceFileCard(
                 imageVector = if (entry.isDirectory) HugeIcons.Folder01 else HugeIcons.File02,
                 contentDescription = null,
                 modifier = Modifier.size(22.dp),
-                tint = if (entry.isDirectory) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
+                tint = fileTint(entry),
             )
             Column(
                 modifier = Modifier
@@ -467,6 +668,28 @@ private fun ErrorCard(message: String) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.error,
         )
+    }
+}
+
+/**
+ * A subtle, theme-token tint hinting at the file kind (the concept's per-type icons, adapted to the
+ * existing M3 palette rather than brand logos). Directories use primary; source/markup, data/config,
+ * and docs each get a distinct role color; everything else falls back to onSurfaceVariant.
+ */
+@Composable
+private fun fileTint(entry: WorkspaceFileEntry): Color {
+    if (entry.isDirectory) return MaterialTheme.colorScheme.primary
+    return when (entry.name.substringAfterLast('.', "").lowercase()) {
+        "kt", "kts", "java", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "rb", "go", "rs",
+        "c", "cc", "cpp", "h", "hpp", "swift", "sh", "bash", "gradle", "html", "htm", "css",
+        "scss", "vue", "svelte" -> MaterialTheme.colorScheme.tertiary
+
+        "json", "xml", "yaml", "yml", "toml", "properties", "ini", "cfg", "conf", "env", "lock"
+            -> MaterialTheme.colorScheme.secondary
+
+        "md", "markdown", "txt", "rst", "adoc" -> MaterialTheme.colorScheme.primary
+
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 }
 

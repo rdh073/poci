@@ -36,6 +36,12 @@ class WorkspaceDetailVM(
     private val _installError = MutableStateFlow<String?>(null)
     val installError = _installError.asStateFlow()
 
+    // Transient error from a file action (create/set-project) — surfaced as a toast by the page, then
+    // dismissed. Kept separate from [WorkspaceDetailState.error] (which is the directory-listing error
+    // shown as an inline card) so a failed "New Folder" doesn't blank the file list.
+    private val _actionError = MutableStateFlow<String?>(null)
+    val actionError = _actionError.asStateFlow()
+
     // The in-flight rootfs install, if any. Held so installRootfs() can refuse re-entry while one is
     // running (a second install races the shared tmp archive/staging dir).
     private var installJob: Job? = null
@@ -77,6 +83,13 @@ class WorkspaceDetailVM(
         refresh()
     }
 
+    /** Jump directly to a known FILES-relative folder path (breadcrumb navigation); "" == root. */
+    fun browseTo(path: String) {
+        if (path == state.value.path) return
+        _state.update { it.copy(path = path, entries = emptyList(), error = null) }
+        refresh()
+    }
+
     fun goUp() {
         val path = state.value.path
         if (path.isBlank()) return
@@ -114,6 +127,52 @@ class WorkspaceDetailVM(
             )
             _state.update { it.copy(entries = entries, loading = false) }
         }
+    }
+
+    // Resolve a new entry name against the currently-browsed FILES path. Folder/file creation only
+    // applies to the FILES area (the project tree); the LINUX rootfs is managed by the installer.
+    private fun childPath(name: String): String {
+        val clean = name.trim().trim('/')
+        val base = state.value.path
+        return if (base.isBlank()) clean else "$base/$clean"
+    }
+
+    fun createFolder(name: String) {
+        if (name.isBlank() || state.value.area != WorkspaceStorageArea.FILES) return
+        launchVm(onError = { _actionError.value = it.message ?: "Failed to create folder" }) {
+            repository.createFolder(id, childPath(name))
+            refresh()
+        }
+    }
+
+    fun createFile(name: String) {
+        if (name.isBlank() || state.value.area != WorkspaceStorageArea.FILES) return
+        launchVm(onError = { _actionError.value = it.message ?: "Failed to create file" }) {
+            // Empty file, overwrite=false so an existing name surfaces a clear error instead of clobbering.
+            repository.writeText(id, childPath(name), text = "", overwrite = false)
+            refresh()
+        }
+    }
+
+    /** Designate the currently-browsed FILES folder as the workspace project dir (the agent's cwd seed). */
+    fun setCurrentAsProjectDir() {
+        if (state.value.area != WorkspaceStorageArea.FILES) return
+        val target = state.value.path
+        launchVm(onError = { _actionError.value = it.message ?: "Failed to set project directory" }) {
+            // The row re-emits via getByIdFlow, so state.workspace.workingDir updates without a reload.
+            repository.setWorkingDir(id, target)
+        }
+    }
+
+    /** Clear the project dir back to the files root (unset). */
+    fun clearProjectDir() {
+        launchVm(onError = { _actionError.value = it.message ?: "Failed to clear project directory" }) {
+            repository.resetWorkingDir(id)
+        }
+    }
+
+    fun dismissActionError() {
+        _actionError.value = null
     }
 
     fun setToolApproval(toolName: String, needsApproval: Boolean) {
