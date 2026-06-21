@@ -837,6 +837,10 @@ private fun FileViewerSheet(
                     code = state.content,
                     language = prismLanguageFor(state.name),
                     modifier = Modifier.fillMaxWidth(),
+                    // The viewer always wraps + numbers lines (a narrow sheet shouldn't need horizontal
+                    // scrolling), independent of the global code-block display settings.
+                    forceWrap = true,
+                    forceLineNumbers = true,
                 )
             }
         }
