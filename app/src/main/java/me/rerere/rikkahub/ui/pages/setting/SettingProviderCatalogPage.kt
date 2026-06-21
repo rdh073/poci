@@ -36,6 +36,7 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Search
 import kotlin.uuid.Uuid
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.Screen
 import me.rerere.rikkahub.data.catalog.ProviderTemplate
 import me.rerere.rikkahub.data.catalog.ProviderTemplates
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -45,10 +46,10 @@ import org.koin.androidx.compose.koinViewModel
 
 /**
  * Browse the curated provider catalog and add ONLY the providers the user picks. Adding mints a fresh,
- * user-owned provider from the template, drops it at the top of the provider list, and returns here — the
- * user then opens it to enter the API key and fetch models FROM THE PROVIDER itself. We deliberately do
- * NOT auto-jump to a model browser pre-filled from models.dev: that would show a model list even for a
- * wrong/empty key and mislead the user into thinking the connection works.
+ * user-owned provider from the template and opens its config page so the user enters the API key right
+ * away; models are then fetched FROM THE PROVIDER itself on that page. We deliberately do NOT jump to a
+ * model browser pre-filled from models.dev: that would show a model list even for a wrong/empty key and
+ * mislead the user into thinking the connection works.
  */
 @Composable
 fun SettingProviderCatalogPage(vm: SettingVM = koinViewModel()) {
@@ -64,9 +65,12 @@ fun SettingProviderCatalogPage(vm: SettingVM = koinViewModel()) {
     fun add(template: ProviderTemplate) {
         val provider = template.instantiate()
         vm.updateSettings(settings.copy(providers = listOf(provider) + settings.providers))
-        // Return to the provider list (the new provider is at the top), rather than jumping into a
-        // model browser — the user opens it to set the key and fetch models from the provider itself.
-        navController.popBackStack()
+        // Go straight to the new provider's config page to enter the API key. Pop the catalog off the
+        // back stack so Back from there returns to the provider list, not here. Models are fetched from
+        // the provider on that page — never a models.dev list that would appear even for a wrong key.
+        navController.navigate(Screen.SettingProviderDetail(providerId = provider.id.toString())) {
+            popUpTo(Screen.SettingProviderCatalog) { inclusive = true }
+        }
     }
 
     Scaffold(
