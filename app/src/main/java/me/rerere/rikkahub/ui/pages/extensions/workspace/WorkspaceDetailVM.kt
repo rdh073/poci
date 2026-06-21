@@ -59,6 +59,10 @@ class WorkspaceDetailVM(
     // One-shot guard: on the first workspace-row emission, open the FILES view at the project dir.
     private var seededInitialPath = false
 
+    // The in-flight file-open read; cancelled when a newer file opens or the viewer closes so a stale
+    // read can't repopulate/overwrite the current view.
+    private var fileViewJob: Job? = null
+
     init {
         // Observe the row instead of read-modify-reloading it. setToolApproval (and any other writer)
         // mutates the row inside a DB transaction; Room re-emits the fresh row on this Flow, so
@@ -193,12 +197,15 @@ class WorkspaceDetailVM(
     /** Open a file in the read-only viewer. Binary/non-text content is reported, never dumped as garbage. */
     fun openFile(entry: WorkspaceFileEntry) {
         if (entry.isDirectory || state.value.area != WorkspaceStorageArea.FILES) return
+        // Supersede any in-flight open so a slow read can't land after the user closed the sheet or
+        // opened a different file.
+        fileViewJob?.cancel()
         if (isLikelyBinaryName(entry.name)) {
             _fileView.value = FileViewState(name = entry.name, path = entry.path, content = null, isBinary = true)
             return
         }
         _fileView.value = FileViewState(name = entry.name, path = entry.path, loading = true)
-        launchVm(onError = {
+        fileViewJob = launchVm(onError = {
             _fileView.value = null
             // readText throws on a too-large file (maxReadBytes) — surface that instead of a blank viewer.
             _actionError.value = it.message ?: "Failed to open file"
@@ -221,12 +228,17 @@ class WorkspaceDetailVM(
         if (current.isBinary || current.loading || current.path.isBlank()) return
         launchVm(onError = { _actionError.value = it.message ?: "Failed to save file" }) {
             repository.writeText(id, current.path, text, overwrite = true)
-            _fileView.value = current.copy(content = text)
+            // Only reflect the save if the same file is still open (the sheet may have been closed or
+            // switched to another file while writing).
+            if (_fileView.value?.path == current.path) {
+                _fileView.value = current.copy(content = text)
+            }
             refresh()
         }
     }
 
     fun closeFile() {
+        fileViewJob?.cancel()
         _fileView.value = null
     }
 
