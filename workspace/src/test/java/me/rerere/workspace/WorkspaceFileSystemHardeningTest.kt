@@ -89,6 +89,33 @@ class WorkspaceFileSystemHardeningTest {
     }
 
     @Test
+    fun `delete of an in-root symlink removes only the link and preserves its in-root target`() {
+        // Regression: a `link -> real` entry lists with its own name but resolved to `real`, so the
+        // file browser's delete followed the link and wiped the (separately visible) `real` dir.
+        val root = Files.createTempDirectory("workspace-delete-inroot-symlink").toFile()
+        val realDir = File(root, "real").apply { mkdirs() }
+        File(realDir, "keep.txt").writeText("keep")
+        Files.createSymbolicLink(File(root, "link").toPath(), realDir.toPath())
+
+        assertTrue(fs.delete(root, "link", recursive = true))
+
+        assertFalse("the symlink itself must be removed", File(root, "link").exists())
+        assertTrue("the symlink's in-root target must survive", realDir.exists())
+        assertEquals("keep", File(realDir, "keep.txt").readText())
+    }
+
+    @Test
+    fun `list reports a symlink entry by its own path not the resolved target`() {
+        val root = Files.createTempDirectory("workspace-list-symlink").toFile()
+        val realDir = File(root, "real").apply { mkdirs() }
+        Files.createSymbolicLink(File(root, "link").toPath(), realDir.toPath())
+
+        val paths = fs.list(root).map { it.path }.toSet()
+        assertTrue("symlink must list by its own path", paths.contains("link"))
+        assertTrue(paths.contains("real"))
+    }
+
+    @Test
     fun `trailing slash child paths stay within workspace`() {
         val root = Files.createTempDirectory("workspace-trailing-slash").toFile()
         File(root, "dir").mkdir()

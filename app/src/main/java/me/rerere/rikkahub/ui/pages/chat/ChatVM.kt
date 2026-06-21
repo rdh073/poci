@@ -314,18 +314,18 @@ class ChatVM(
     }
 
     private val ensureWorkspaceMutex = Mutex()
-    private val ensuredWorkspaceIds = mutableMapOf<Uuid, String>()
 
     /**
      * Lazily ensure the assistant has a workspace, creating + assigning one on first use (no
      * cold-start provisioning at app launch). Returns the workspace id to open — drives the chat
-     * folder shortcut so pressing it always lands in a real workspace. Single-flight (mutex + memo):
-     * the lock serializes concurrent presses and the memo makes a just-created id visible to the next
-     * caller before the settings flow re-emits, so two quick taps can't each create + assign a
-     * separate workspace (which would orphan one and navigate a press to an unassigned workspace).
+     * folder shortcut so pressing it always lands in a real workspace. Single-flight via the mutex:
+     * the lock serializes concurrent presses, and [settingsStore.update] sets `settingsFlow.value`
+     * synchronously before persisting, so the next caller re-reads the just-assigned `workspaceId`
+     * from live settings — two quick taps can't each create + assign a separate workspace. Reading
+     * live settings each call (no memo) also means a later workspace deletion/reassignment can't
+     * strand the shortcut on a stale id.
      */
     suspend fun ensureWorkspaceId(assistantId: Uuid): String = ensureWorkspaceMutex.withLock {
-        ensuredWorkspaceIds[assistantId]?.let { return@withLock it }
         val assistant = settings.value.assistants.find { it.id == assistantId }
             ?: error("Assistant not found")
         assistant.workspaceId?.let { return@withLock it.toString() }
@@ -338,7 +338,6 @@ class ChatVM(
                 }
             )
         }
-        ensuredWorkspaceIds[assistantId] = workspace.id
         workspace.id
     }
 

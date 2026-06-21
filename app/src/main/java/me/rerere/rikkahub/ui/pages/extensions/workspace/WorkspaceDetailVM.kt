@@ -164,8 +164,15 @@ class WorkspaceDetailVM(
 
     // Resolve a new entry name against the currently-browsed FILES path. Folder/file creation only
     // applies to the FILES area (the project tree); the LINUX rootfs is managed by the installer.
+    // The name must be a single path segment: reject separators and `.`/`..` so a typed `../x` can't
+    // create an entry outside the directory the user is looking at (resolvePath already bounds it to
+    // the workspace root, but New file/folder must stay a child of the current dir).
     private fun childPath(name: String): String {
-        val clean = name.trim().trim('/')
+        val clean = name.trim()
+        require(
+            clean.isNotEmpty() && clean != "." && clean != ".." &&
+                !clean.contains('/') && !clean.contains('\\')
+        ) { "Name must be a single folder/file name without path separators" }
         val base = state.value.path
         return if (base.isBlank()) clean else "$base/$clean"
     }
