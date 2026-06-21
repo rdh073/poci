@@ -339,11 +339,17 @@ private fun ChatPageContent(
                         showBoard = true
                     },
                     onOpenWorkspaceFiles = {
-                        val workspaceId = activeAssistant.workspaceId
-                        if (workspaceId != null) {
-                            navController.navigate(Screen.WorkspaceDetail(workspaceId.toString()))
-                        } else {
-                            navController.navigate(Screen.Workspaces)
+                        // Lazy: create + assign a workspace on first press (no cold-start provisioning),
+                        // then open its file browser — so the folder button always lands somewhere real.
+                        scope.launch {
+                            runCatching { vm.ensureWorkspaceId(activeAssistant.id) }
+                                .onSuccess { navController.navigate(Screen.WorkspaceDetail(it)) }
+                                .onFailure {
+                                    toaster.show(
+                                        it.message ?: "Failed to open workspace",
+                                        type = ToastType.Error,
+                                    )
+                                }
                         }
                     },
                     backgroundJobs = backgroundJobs,

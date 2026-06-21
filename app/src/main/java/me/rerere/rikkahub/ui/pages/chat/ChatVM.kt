@@ -311,6 +311,27 @@ class ChatVM(
         }
     }
 
+    /**
+     * Lazily ensure the assistant has a workspace, creating + assigning one on first use (no
+     * cold-start provisioning at app launch). Returns the workspace id to open — drives the chat
+     * folder shortcut so pressing it always lands in a real workspace.
+     */
+    suspend fun ensureWorkspaceId(assistantId: Uuid): String {
+        val assistant = settings.value.assistants.find { it.id == assistantId }
+            ?: error("Assistant not found")
+        assistant.workspaceId?.let { return it.toString() }
+        val workspace = workspaceRepository.create(assistant.name)
+        val newId = Uuid.parse(workspace.id)
+        settingsStore.update { s ->
+            s.copy(
+                assistants = s.assistants.map {
+                    if (it.id == assistantId) it.copy(workspaceId = newId) else it
+                }
+            )
+        }
+        return workspace.id
+    }
+
     fun deleteConversation(conversation: Conversation) {
         launchVm(onError = { reportOperationError(it) }) {
             chatService.deleteConversation(conversation)
