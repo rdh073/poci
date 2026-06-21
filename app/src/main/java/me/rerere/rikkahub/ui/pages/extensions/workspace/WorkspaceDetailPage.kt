@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -57,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,6 +70,9 @@ import com.dokar.sonner.ToastType
 import kotlinx.coroutines.launch
 import me.rerere.hugeicons.HugeIcons
 import me.rerere.hugeicons.stroke.Add01
+import me.rerere.hugeicons.stroke.Cancel01
+import me.rerere.hugeicons.stroke.CheckmarkCircle01
+import me.rerere.hugeicons.stroke.Edit01
 import me.rerere.hugeicons.stroke.File02
 import me.rerere.hugeicons.stroke.Folder01
 import me.rerere.hugeicons.stroke.LeftToRightListBullet
@@ -261,7 +267,7 @@ fun WorkspaceDetailPage(id: String) {
     }
 
     fileView?.let { view ->
-        FileViewerSheet(state = view, onDismiss = vm::closeFile)
+        FileViewerSheet(state = view, onDismiss = vm::closeFile, onSave = vm::saveFile)
     }
 }
 
@@ -794,23 +800,61 @@ private fun FileEntryMenu(
 private fun FileViewerSheet(
     state: FileViewState,
     onDismiss: () -> Unit,
+    onSave: (String) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Edit state is keyed to the open file's path so switching files resets it; draft also resets when
+    // the persisted content changes (e.g. after a save round-trips through the VM).
+    var editing by remember(state.path) { mutableStateOf(false) }
+    var draft by remember(state.path, state.content) { mutableStateOf(state.content.orEmpty()) }
+    val canEdit = !state.loading && !state.isBinary && state.content != null
+
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
                 .padding(bottom = 24.dp)
+                .imePadding()
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text(
-                text = state.name,
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = state.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                if (canEdit) {
+                    if (editing) {
+                        IconButton(onClick = {
+                            draft = state.content.orEmpty()
+                            editing = false
+                        }) {
+                            Icon(HugeIcons.Cancel01, contentDescription = "Cancel")
+                        }
+                        IconButton(onClick = {
+                            onSave(draft)
+                            editing = false
+                        }) {
+                            Icon(
+                                HugeIcons.CheckmarkCircle01,
+                                contentDescription = "Save",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    } else {
+                        IconButton(onClick = { editing = true }) {
+                            Icon(HugeIcons.Edit01, contentDescription = "Edit")
+                        }
+                    }
+                }
+            }
             when {
                 state.loading -> Text(
                     text = "Loading…",
@@ -822,6 +866,16 @@ private fun FileViewerSheet(
                     text = "Binary file — not viewable as text.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                editing -> OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // Bounded so the field scrolls internally instead of fighting the sheet's scroll.
+                        .heightIn(min = 240.dp, max = 480.dp),
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 )
 
                 state.content.isNullOrEmpty() -> Text(

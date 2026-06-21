@@ -194,10 +194,10 @@ class WorkspaceDetailVM(
     fun openFile(entry: WorkspaceFileEntry) {
         if (entry.isDirectory || state.value.area != WorkspaceStorageArea.FILES) return
         if (isLikelyBinaryName(entry.name)) {
-            _fileView.value = FileViewState(name = entry.name, content = null, isBinary = true)
+            _fileView.value = FileViewState(name = entry.name, path = entry.path, content = null, isBinary = true)
             return
         }
-        _fileView.value = FileViewState(name = entry.name, loading = true)
+        _fileView.value = FileViewState(name = entry.name, path = entry.path, loading = true)
         launchVm(onError = {
             _fileView.value = null
             // readText throws on a too-large file (maxReadBytes) — surface that instead of a blank viewer.
@@ -208,9 +208,21 @@ class WorkspaceDetailVM(
             val binary = text.contains('\u0000')
             _fileView.value = FileViewState(
                 name = entry.name,
+                path = entry.path,
                 content = if (binary) null else text,
                 isBinary = binary,
             )
+        }
+    }
+
+    /** Write edited text back to the open file (FILES area), then reflect it in the viewer + listing. */
+    fun saveFile(text: String) {
+        val current = _fileView.value ?: return
+        if (current.isBinary || current.loading || current.path.isBlank()) return
+        launchVm(onError = { _actionError.value = it.message ?: "Failed to save file" }) {
+            repository.writeText(id, current.path, text, overwrite = true)
+            _fileView.value = current.copy(content = text)
+            refresh()
         }
     }
 
@@ -315,6 +327,7 @@ data class WorkspaceDetailState(
 /** State of the read-only file viewer: text [content], or [isBinary] when the file isn't human-readable. */
 data class FileViewState(
     val name: String,
+    val path: String = "",
     val content: String? = null,
     val isBinary: Boolean = false,
     val loading: Boolean = false,
