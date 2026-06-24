@@ -150,7 +150,7 @@ private fun createUpdateSkillTool(
                 })
                 put("deletes", buildJsonObject {
                     put("type", "array")
-                    put("description", "Skill-root-relative file paths to delete. Cannot include SKILL.md.")
+                    put("description", "Skill-root-relative file paths to delete. Cannot remove SKILL.md (listing it here is only valid if `changes` re-adds a complete SKILL.md).")
                 })
             },
             required = listOf("name"),
