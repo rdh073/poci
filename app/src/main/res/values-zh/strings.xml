@@ -4,7 +4,7 @@
   <string name="about_page_title">关于</string>
   <string name="about_page_version">版本</string>
   <string name="add">添加</string>
-  <string name="app_name">xcloudz</string>
+  <string name="app_name">Poci</string>
   <string name="asr_button_content_description">语音识别</string>
   <string name="asr_button_stop">停止</string>
   <string name="assistant_detail_basic_desc">配置名称、头像、模型和参数</string>
@@ -793,7 +793,7 @@
   <string name="setting_page_search_title">搜索服务</string>
   <string name="setting_page_share">分享</string>
   <string name="setting_page_share_desc">分享本APP给朋友</string>
-  <string name="setting_page_share_text">xcloudz - 开源安卓AI助手\n\n官网: https://github.com/rdh073/rikkahub</string>
+  <string name="setting_page_share_text">Poci - 开源安卓AI助手\n\n官网: https://github.com/rdh073/rikkahub</string>
   <string name="setting_page_theme_setting">主题</string>
   <string name="setting_page_theme_setting_desc">自定义应用配色方案</string>
   <string name="setting_theme_page_preset_themes">预设主题</string>
@@ -817,7 +817,7 @@
   <string name="setting_page_web_server_address_note_desc">局域网地址：使用设备 WiFi IP，同一网络中的其他设备可访问。移动数据网络下不可用。
 本地地址：使用 localhost，仅限本设备访问。
 mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过名称访问，无需知道 IP。</string>
-  <string name="setting_page_web_server_desc">允许你通过网页访问 xcloudz</string>
+  <string name="setting_page_web_server_desc">允许你通过网页访问 Poci</string>
   <string name="setting_page_web_server_error">错误</string>
   <string name="setting_page_web_server_jwt_enable">启用身份验证</string>
   <string name="setting_page_web_server_jwt_enable_desc">访问网页界面时需要密码验证</string>
@@ -1112,14 +1112,14 @@ mDNS 地址：使用 .local 主机名，同一网络中的其他设备可通过�
   <string name="assistant_page_subagent_max_steps">子代理最大步数</string>
   <string name="assistant_page_subagent_max_steps_desc">当该助手作为子代理运行时，最大工具使用步骤。留空以使用默认值</string>
   <string name="chat_subagent_running">正在运行 %1$s</string>
-  <string name="automation_a11y_service_label">xcloudz UI 自动化</string>
+  <string name="automation_a11y_service_label">Poci UI 自动化</string>
   <string name="automation_a11y_service_description">允许已启用的助手观察（只读）其他应用的屏幕来帮助您。它无法点击、输入或滚动。您可以随时通过浮动的停止按钮停止它。</string>
   <string name="automation_kill_switch_stop">停止</string>
   <string name="assistant_page_ui_automation">UI自动化（屏幕控制）</string>
-  <string name="assistant_page_ui_automation_desc">允许此助手观察其他应用的屏幕（仅限读取）。需要在系统设置中启用 xcloudz 的无障碍服务。仅限读取：无法点击或输入。</string>
+  <string name="assistant_page_ui_automation_desc">允许此助手观察其他应用的屏幕（仅限读取）。需要在系统设置中启用 Poci 的无障碍服务。仅限读取：无法点击或输入。</string>
   <string name="assistant_page_gradient_background">渐变背景</string>
   <string name="assistant_page_gradient_background_desc">在聊天页面使用动态渐变背景</string>
-  <string name="automation_kill_switch_unavailable">无法启动自动化：无法显示「停止」紧急开关。请启用 xcloudz 的无障碍服务和悬浮窗权限后重试。</string>
+  <string name="automation_kill_switch_unavailable">无法启动自动化：无法显示「停止」紧急开关。请启用 Poci 的无障碍服务和悬浮窗权限后重试。</string>
   <string name="chat_status_retrieving_knowledge">正在检索知识库…</string>
   <string name="automation_confirm_prompt">在 %1$s 中确认操作：%2$s %3$s？</string>
   <string name="automation_confirm_allow">确认</string>
