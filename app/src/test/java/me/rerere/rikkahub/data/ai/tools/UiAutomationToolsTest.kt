@@ -21,6 +21,7 @@ import me.rerere.automation.backend.PerformAction
 import me.rerere.automation.backend.RawNode
 import me.rerere.automation.backend.RawTree
 import me.rerere.automation.backend.RawWindow
+import me.rerere.automation.observe.SnapshotProjector
 import me.rerere.automation.cap.Capability
 import me.rerere.automation.cap.CapabilityGuard
 import me.rerere.automation.cap.Decision
@@ -303,7 +304,7 @@ class UiAutomationToolsTest {
         assertFalse("password plaintext must never be rendered", text.contains("hunter2"))
         assertFalse(
             "host package must never appear in the projection",
-            text.contains("me.rerere.rikkahub"),
+            text.contains(SnapshotProjector.HOST_PACKAGE),
         )
         // The eyes-open binding internals (windowId / structuralPath / structuralFingerprint) are NEVER
         // model-facing — the renderer emits only tid/role/flags/text/form/key. The structural
@@ -352,15 +353,15 @@ class UiAutomationToolsTest {
         // host so the guard admits the observe (we are explicitly observing our own foreground here).
         val hostTree = RawTree(
             stateSeq = 3L,
-            foregroundPkg = "me.rerere.rikkahub",
-            windows = listOf(RawWindow(pkg = "me.rerere.rikkahub", root = RawNode(text = "chat"))),
+            foregroundPkg = SnapshotProjector.HOST_PACKAGE,
+            windows = listOf(RawWindow(pkg = SnapshotProjector.HOST_PACKAGE, root = RawNode(text = "chat"))),
         )
         val backend = FakeBackend(hostTree)
-        val guard = healthyGuard(surface = setOf("me.rerere.rikkahub"))
+        val guard = healthyGuard(surface = setOf(SnapshotProjector.HOST_PACKAGE))
         val tool = getUiAutomationTools(
             guard = guard,
             core = AutomationCore(backend),
-            foregroundPkg = { "me.rerere.rikkahub" },
+            foregroundPkg = { SnapshotProjector.HOST_PACKAGE },
             confirm = AlwaysConfirm,
         ).first { it.name == UI_OBSERVE_TOOL_NAME }
 
