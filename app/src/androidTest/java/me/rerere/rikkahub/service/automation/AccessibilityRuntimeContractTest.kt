@@ -86,7 +86,7 @@ class AccessibilityRuntimeContractTest {
     fun contract_snapshotRawTree_excludes_host_package_from_projection() = runBlocking {
         val withHostWindow = appTree(stateSeq = 1L).copy(
             windows = appTree(1L).windows + RawWindow(
-                pkg = "me.rerere.rikkahub",
+                pkg = SnapshotProjector.HOST_PACKAGE,
                 root = RawNode(text = "host chrome", className = "android.widget.TextView"),
             ),
         )
@@ -235,10 +235,10 @@ class AccessibilityRuntimeContractTest {
     fun contract_host_foreground_yields_pause_state_with_no_targets() = runBlocking {
         val hostForeground = RawTree(
             stateSeq = 2L,
-            foregroundPkg = "me.rerere.rikkahub",
-            windows = listOf(RawWindow(pkg = "me.rerere.rikkahub", root = RawNode(text = "chat"))),
+            foregroundPkg = SnapshotProjector.HOST_PACKAGE,
+            windows = listOf(RawWindow(pkg = SnapshotProjector.HOST_PACKAGE, root = RawNode(text = "chat"))),
         )
-        val snapshot = projector.project(backend(hostForeground).snapshotRawTree(), setOf("me.rerere.rikkahub"))
+        val snapshot = projector.project(backend(hostForeground).snapshotRawTree(), setOf(SnapshotProjector.HOST_PACKAGE))
         assertEquals(ScreenState.FOREGROUND_IS_HOST, snapshot.screenState)
         assertTrue(snapshot.targets.isEmpty())
     }
