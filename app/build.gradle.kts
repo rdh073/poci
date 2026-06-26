@@ -24,10 +24,12 @@ android {
     }
 
     defaultConfig {
-        applicationId = "me.rerere.rikkahub"
+        // Install identity (APK package). Kept separate from `namespace` (the code/R-class package,
+        // still me.rerere.rikkahub) — only the build's published package id is the Poci-branded one.
+        applicationId = "me.poci.ai"
         minSdk = 26
         targetSdk = 37
-        versionCode = 163
+        versionCode = 1
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

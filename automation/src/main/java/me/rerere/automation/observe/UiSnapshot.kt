@@ -65,7 +65,7 @@ enum class ScreenState {
     /** FLAG_SECURE or an empty tree: nothing may be projected (design I1). */
     SECURE_WINDOW,
 
-    /** Foreground is the host app (me.rerere.rikkahub): the agent must pause/re-ground (P12). */
+    /** Foreground is the host app (me.poci.ai): the agent must pause/re-ground (P12). */
     FOREGROUND_IS_HOST,
 }
 

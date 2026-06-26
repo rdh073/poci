@@ -37,7 +37,7 @@ import java.security.MessageDigest
 /**
  * @param hostPackage the host app's REAL application id, used for the host-exclusion (P2/P12). It MUST
  *   be the running package — which on a debug build carries the `.debug` suffix
- *   (`me.rerere.rikkahub.debug`), NOT the base id — or the agent would observe/act on its own UI.
+ *   (`me.poci.ai.debug`), NOT the base id — or the agent would observe/act on its own UI.
  *   Defaults to the base id for tests / default construction; the app injects its BuildConfig id.
  */
 class SnapshotProjector(private val hostPackage: String = HOST_PACKAGE) {
@@ -119,7 +119,7 @@ class SnapshotProjector(private val hostPackage: String = HOST_PACKAGE) {
     }
 
     companion object {
-        const val HOST_PACKAGE = "me.rerere.rikkahub"
+        const val HOST_PACKAGE = "me.poci.ai"
         private const val MAX_MASK_LENGTH = 32
 
         /** The fingerprint scheme version — prepended to every digest so a future algorithm change is

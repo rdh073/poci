@@ -811,7 +811,7 @@
   <string name="setting_page_search_title">Search Service</string>
   <string name="setting_page_share">Share</string>
   <string name="setting_page_share_desc">Share this app with friends</string>
-  <string name="setting_page_share_text">Poci - Open Source Android AI Assistant\n\nWebsite: https://github.com/rdh073/rikkahub</string>
+  <string name="setting_page_share_text">Poci - Open Source Android AI Assistant\n\nWebsite: https://github.com/rdh073/poci</string>
   <string name="setting_page_theme_setting">Theme</string>
   <string name="setting_page_theme_setting_desc">Customize app color scheme</string>
   <string name="setting_theme_page_preset_themes">Preset Themes</string>
