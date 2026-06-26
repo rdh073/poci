@@ -786,7 +786,7 @@
   <string name="setting_page_search_title">검색 서비스</string>
   <string name="setting_page_share">공유</string>
   <string name="setting_page_share_desc">앱을 친구들과 공유하기</string>
-  <string name="setting_page_share_text">Poci - 오픈소스 Android AI 어시스턴트\n\n웹사이트: https://github.com/rdh073/rikkahub</string>
+  <string name="setting_page_share_text">Poci - 오픈소스 Android AI 어시스턴트\n\n웹사이트: https://github.com/rdh073/poci</string>
   <string name="setting_page_theme_setting">테마</string>
   <string name="setting_page_theme_setting_desc">앱 색상 구성 사용자 지정</string>
   <string name="setting_theme_page_preset_themes">프리셋 테마</string>
