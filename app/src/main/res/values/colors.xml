@@ -1,10 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <!-- Splash colors follow the device dark/light theme: this file is the LIGHT variant; values-night
-       supplies the dark one. Light splash = light background + a dark robot tint. -->
+  <!-- Splash background follows the device dark/light theme: this is the LIGHT variant; values-night
+       supplies the dark one. The teapot mascot is drawn in full colour on top (not tinted). -->
   <color name="splash_background">#FFFFFF</color>
-  <color name="splash_icon_tint">#212833</color>
 
-  <!-- Adaptive launcher icon background: a flat white (no circle) behind the dark robot foreground. -->
+  <!-- Adaptive launcher icon background: a flat white (no circle) behind the teapot foreground. -->
   <color name="ic_launcher_background">#FFFFFF</color>
 </resources>
