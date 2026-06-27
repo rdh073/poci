@@ -32,6 +32,25 @@ class ModelBrowserLogicTest {
         assertTrue(filterModels(catalog, "gpt claude").isEmpty())
     }
 
+    // Regression: a provider's /models can repeat a modelId (e.g. Mistral exposes aliases as separate
+    // entries). The browser keys each LazyColumn row by modelId, so duplicates crashed subcomposition
+    // with IllegalArgumentException on scroll. filterModels must collapse them to the first occurrence.
+    @Test
+    fun `duplicate modelIds are collapsed so LazyColumn keys stay unique`() {
+        val withDupes = listOf(
+            model("mistral-small-latest", name = "Mistral Small"),
+            model("mistral-small-latest", name = "Mistral Small (alias)"),
+            model("mistral-large-latest"),
+            model("mistral-large-latest"),
+        )
+        val ids = filterModels(withDupes, "").map { it.modelId }
+        assertEquals(listOf("mistral-small-latest", "mistral-large-latest"), ids)
+        assertEquals("keys must be unique for LazyColumn", ids, ids.distinct())
+
+        // de-dup also holds after keyword filtering
+        assertEquals(listOf("mistral-small-latest"), filterModels(withDupes, "small").map { it.modelId })
+    }
+
     @Test
     fun `select-all is disabled without an active filter`() {
         // The footgun guard: an unfiltered catalog of hundreds must NOT offer one-tap enable-all.
