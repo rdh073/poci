@@ -62,25 +62,36 @@ fun MeshGradientBackground(
     // and stays correct in light/dark. The base relaxes a subtle primary tint at the top into the
     // theme surface; the blobs ARE the three accent tokens (primary / tertiary / secondary).
     val cs = MaterialTheme.colorScheme
+
+    // In LIGHT mode the accent tokens are mid-tone (~tone 40) and saturated, so washing them at the
+    // blob alphas — and especially where two blobs overlap — darkens the canvas and hurts chat
+    // readability regardless of which theme/token the user picks. Blend each accent toward its tone-90
+    // container, which is light-by-construction, so the wash stays airy and legible while still
+    // carrying the theme hue. Dark mode keeps the raw accents: its deep surface is intentional and a
+    // bright accent over it stays legible.
+    val washPrimary = if (dark) cs.primary else lerp(cs.primaryContainer, cs.primary, 0.20f)
+    val washSecondary = if (dark) cs.secondary else lerp(cs.secondaryContainer, cs.secondary, 0.20f)
+    val washTertiary = if (dark) cs.tertiary else lerp(cs.tertiaryContainer, cs.tertiary, 0.20f)
+
     val baseGradient = arrayOf(
-        0.0f to lerp(cs.surface, cs.primary, if (dark) 0.16f else 0.10f),
-        0.30f to lerp(cs.surface, cs.primary, if (dark) 0.06f else 0.04f),
+        0.0f to lerp(cs.surface, washPrimary, if (dark) 0.16f else 0.10f),
+        0.30f to lerp(cs.surface, washPrimary, if (dark) 0.06f else 0.04f),
         0.60f to cs.surface,
         1.0f to cs.surface,
     )
 
     // Blob intensity per mode (kept subtle in dark); the colours themselves come from the theme tokens.
-    val alphaPrimary = if (dark) 0.34f else 0.42f
-    val alphaTertiary = if (dark) 0.26f else 0.34f
-    val alphaSecondary = if (dark) 0.28f else 0.36f
+    val alphaPrimary = if (dark) 0.34f else 0.40f
+    val alphaTertiary = if (dark) 0.26f else 0.32f
+    val alphaSecondary = if (dark) 0.28f else 0.34f
 
     // The colour stops only depend on the theme, so build the lists ONCE here (per recomposition),
     // not inside the Canvas draw lambda — that lambda re-runs every animation frame and would
     // otherwise allocate three fresh List<Color> per frame. Only the radial Brush itself is rebuilt
     // per frame (its center is animated and Brush is immutable), which is inherent to the effect.
-    val primaryStops = listOf(cs.primary.copy(alpha = alphaPrimary), Color.Transparent)
-    val tertiaryStops = listOf(cs.tertiary.copy(alpha = alphaTertiary), Color.Transparent)
-    val secondaryStops = listOf(cs.secondary.copy(alpha = alphaSecondary), Color.Transparent)
+    val primaryStops = listOf(washPrimary.copy(alpha = alphaPrimary), Color.Transparent)
+    val tertiaryStops = listOf(washTertiary.copy(alpha = alphaTertiary), Color.Transparent)
+    val secondaryStops = listOf(washSecondary.copy(alpha = alphaSecondary), Color.Transparent)
 
     Box(
         modifier = modifier
