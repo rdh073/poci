@@ -11,16 +11,25 @@ import me.rerere.ai.provider.Model
 /**
  * Filter [all] by [query]: split into space-separated keywords; a model matches when EVERY keyword
  * is a case-insensitive substring of its modelId or displayName. A blank query matches everything.
+ *
+ * The result is de-duplicated by modelId: a provider's `/models` can list the same modelId more than
+ * once (e.g. Mistral exposes aliases as separate entries), and the browser keys each LazyColumn row by
+ * modelId — duplicate keys crash subcomposition. Since modelId is the model's identity here (you can't
+ * enable the same one twice), collapse duplicates to their first occurrence.
  */
 fun filterModels(all: List<Model>, query: String): List<Model> {
     val keywords = query.split(" ").filter { it.isNotBlank() }
-    if (keywords.isEmpty()) return all
-    return all.filter { model ->
-        keywords.all { keyword ->
-            model.modelId.contains(keyword, ignoreCase = true) ||
-                model.displayName.contains(keyword, ignoreCase = true)
+    val matched = if (keywords.isEmpty()) {
+        all
+    } else {
+        all.filter { model ->
+            keywords.all { keyword ->
+                model.modelId.contains(keyword, ignoreCase = true) ||
+                    model.displayName.contains(keyword, ignoreCase = true)
+            }
         }
     }
+    return matched.distinctBy { it.modelId }
 }
 
 /**
