@@ -10,6 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
@@ -17,6 +18,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.lerp
 import me.rerere.rikkahub.ui.theme.LocalDarkMode
 import kotlin.math.PI
 import kotlin.math.cos
@@ -55,41 +57,30 @@ fun MeshGradientBackground(
     val p3 by phase(20_000, "p3")
 
     val dark = LocalDarkMode.current
-    val baseGradient = if (dark) {
-        // Dark: deep blue at the top, fading down to near-black.
-        arrayOf(
-            0.0f to Color(0xFF1B2A45),
-            0.22f to Color(0xFF15223A),
-            0.45f to Color(0xFF0D1626),
-            0.65f to Color(0xFF0A0F18),
-            1.0f to Color(0xFF080B12),
-        )
-    } else {
-        // Light: bluish at the top, fading down to white.
-        arrayOf(
-            0.0f to Color(0xFFAFD0F2),
-            0.22f to Color(0xFFCBE0F6),
-            0.45f to Color(0xFFF1F7FD),
-            0.65f to Color(0xFFFFFFFF),
-            1.0f to Color(0xFFFFFFFF),
-        )
-    }
+    // Drive the whole effect from the active theme's colour tokens instead of hardcoded blues, so it
+    // follows every theme (dynamic colour, the presets, and custom primary/secondary/tertiary themes)
+    // and stays correct in light/dark. The base relaxes a subtle primary tint at the top into the
+    // theme surface; the blobs ARE the three accent tokens (primary / tertiary / secondary).
+    val cs = MaterialTheme.colorScheme
+    val baseGradient = arrayOf(
+        0.0f to lerp(cs.surface, cs.primary, if (dark) 0.16f else 0.10f),
+        0.30f to lerp(cs.surface, cs.primary, if (dark) 0.06f else 0.04f),
+        0.60f to cs.surface,
+        1.0f to cs.surface,
+    )
 
-    // Blob palette (blue / teal / light blue) and intensity, one set each for light and dark.
-    val blobBlue = if (dark) Color(0xFF3E6FB0) else Color(0xFF9EC5F0)
-    val blobTeal = if (dark) Color(0xFF2E7D74) else Color(0xFFA8E6E0)
-    val blobLightBlue = if (dark) Color(0xFF4A6E96) else Color(0xFFB6D7F2)
-    val alphaBlue = if (dark) 0.40f else 0.55f
-    val alphaTeal = if (dark) 0.28f else 0.35f
-    val alphaLightBlue = if (dark) 0.32f else 0.40f
+    // Blob intensity per mode (kept subtle in dark); the colours themselves come from the theme tokens.
+    val alphaPrimary = if (dark) 0.34f else 0.42f
+    val alphaTertiary = if (dark) 0.26f else 0.34f
+    val alphaSecondary = if (dark) 0.28f else 0.36f
 
     // The colour stops only depend on the theme, so build the lists ONCE here (per recomposition),
     // not inside the Canvas draw lambda — that lambda re-runs every animation frame and would
     // otherwise allocate three fresh List<Color> per frame. Only the radial Brush itself is rebuilt
     // per frame (its center is animated and Brush is immutable), which is inherent to the effect.
-    val blueStops = listOf(blobBlue.copy(alpha = alphaBlue), Color.Transparent)
-    val tealStops = listOf(blobTeal.copy(alpha = alphaTeal), Color.Transparent)
-    val lightBlueStops = listOf(blobLightBlue.copy(alpha = alphaLightBlue), Color.Transparent)
+    val primaryStops = listOf(cs.primary.copy(alpha = alphaPrimary), Color.Transparent)
+    val tertiaryStops = listOf(cs.tertiary.copy(alpha = alphaTertiary), Color.Transparent)
+    val secondaryStops = listOf(cs.secondary.copy(alpha = alphaSecondary), Color.Transparent)
 
     Box(
         modifier = modifier
@@ -103,23 +94,23 @@ fun MeshGradientBackground(
             val r = maxOf(w, h)
 
             // Blobs all cluster near the top and fade downward, leaving the lower half clear.
-            // Top blue (primary color, slow horizontal drift).
+            // Top primary (slow horizontal drift).
             drawBlob(
                 center = Offset(w * 0.45f + sin(p1) * w * 0.20f, h * 0.02f + cos(p1) * h * 0.05f),
                 radius = r * 0.55f,
-                colorStops = blueStops,
+                colorStops = primaryStops,
             )
-            // Top-left teal accent.
+            // Top-left tertiary accent.
             drawBlob(
                 center = Offset(w * 0.12f + sin(p2) * w * 0.12f, h * 0.22f + cos(p2) * h * 0.08f),
                 radius = r * 0.40f,
-                colorStops = tealStops,
+                colorStops = tertiaryStops,
             )
-            // Top-right light blue.
+            // Top-right secondary.
             drawBlob(
                 center = Offset(w * 0.88f + sin(p3) * w * -0.14f, h * 0.08f + cos(p3) * h * 0.06f),
                 radius = r * 0.42f,
-                colorStops = lightBlueStops,
+                colorStops = secondaryStops,
             )
         }
 
