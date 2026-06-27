@@ -10,7 +10,7 @@
     <item name="windowSplashScreenBackground">@color/splash_background</item>
     <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
     <!-- Force the predictable "icon with background" layout: the icon's circular backing matches the
-         splash background (per-theme), so the system places the robot inside its safe-zone circle without
+         splash background (per-theme), so the system places the teapot inside its safe-zone circle without
          the OEM mask clipping the lower half. The circle is invisible because it equals the splash bg. -->
     <item name="windowSplashScreenIconBackgroundColor">@color/splash_background</item>
     <item name="postSplashScreenTheme">@style/Theme.Rikkahub</item>

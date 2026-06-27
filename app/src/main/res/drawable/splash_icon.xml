@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Splash icon: the full-colour Poci teapot mascot, centered on the theme-following splash background.
-     It is multi-colour (navy body / amber lid / cream face), so it is NOT tinted — the splash background
-     (@color/splash_background) still adapts light/dark via values / values-night. -->
+<!-- Splash icon: the Poci teapot mascot (navy body / amber lid, transparent face), centered on the
+     theme-following splash background. It is full-colour, so it is NOT tinted; instead the bitmap itself
+     adapts light/dark via resource qualifiers — drawable-xxxhdpi is the dark-on-light artwork and
+     drawable-night-xxxhdpi is a colour-reversed light-on-dark variant — while @color/splash_background
+     adapts via values / values-night. -->
 <bitmap xmlns:android="http://schemas.android.com/apk/res/android"
     android:src="@drawable/splash_robot"
     android:gravity="center" />
