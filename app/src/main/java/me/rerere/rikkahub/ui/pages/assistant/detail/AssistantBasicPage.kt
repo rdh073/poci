@@ -46,11 +46,19 @@ import me.rerere.rikkahub.ui.components.ui.TagsInput
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.hooks.heroAnimation
 import me.rerere.rikkahub.ui.theme.CustomColors
-import me.rerere.common.text.toFixed
 import org.koin.androidx.compose.koinViewModel
 import org.koin.core.parameter.parametersOf
 import kotlin.math.roundToInt
 import me.rerere.rikkahub.data.model.Tag as DataTag
+
+/**
+ * Snap a raw slider value (0..1) to two decimals, locale-independently. The old code round-tripped
+ * through `toFixed(2)` (`String.format`, DEFAULT locale) then `toFloatOrNull()`; in a comma-decimal
+ * locale (e.g. en-ID) `"%.2f".format(0.5)` is `"0,50"`, which `toFloatOrNull()` rejects, so the value
+ * fell back to 1.0 on every drag — the opacity slider jumped to 100% and could not be moved. Rounding
+ * numerically (roundToInt) never touches locale.
+ */
+internal fun snapOpacity(raw: Float): Float = ((raw * 100).roundToInt() / 100f).coerceIn(0f, 1f)
 
 @Composable
 fun AssistantBasicPage(id: String) {
@@ -540,7 +548,7 @@ internal fun AssistantBasicContent(
                         onValueChange = {
                             onUpdate(
                                 assistant.copy(
-                                    backgroundOpacity = it.toFixed(2).toFloatOrNull()?.coerceIn(0f, 1f) ?: 1.0f
+                                    backgroundOpacity = snapOpacity(it)
                                 )
                             )
                         },
