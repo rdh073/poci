@@ -5,29 +5,58 @@
   </picture>
   <h1>Poci</h1>
 
-A native Android LLM chat client that supports switching between different providers for
-conversations 🤖💬☁️
+A native Android **agent harness** — an on-device LLM runtime that runs tool-calling agents
+across OpenAI-, Google-, and Anthropic-compatible providers 🤖🫖
 
 [简体中文](README_ZH_CN.md) | [繁體中文](README_ZH_TW.md) | English
 </div>
 
+Poci runs a full agentic **turn** on-device, not just a single request: a tool-calling agent
+loop with hooks, per-step context budgeting, subagents, and scheduled or background work — all
+on top of a provider-agnostic wire layer. It began as a chat client and grew into a portable
+harness for running agents wherever you carry your phone.
+
 ## ✨ Features
 
-- 🎨 Material You Design and 🌙 Dark mode
-- 🔄 Multiple AI Provider Support: custom API / URL / models (all OpenAI, Google, Anthropic compatible api)
-- 🖼️ Multimodal input support (Image, Text Documentation, PDF, Docx)
-- 🖥️ Web access for multi-platform use
-- 🛠️ MCP support
-- 📝 Markdown Rendering (with code highlighting, Latex formulas, tables, Mermaid)
-- 🪾 Message Branching
-- 🔍 Search capabilities (Exa, Tavily, Zhipu, LinkUp, Brave, Perplexity, etc.)
-- 🧩 Prompt variables (model name, time, etc.)
-- 🤳 QR code export and import for providers
-- 🤖 Agent customization
-- 🧠 ChatGPT-like memory feature
-- 📝 AI Translation
-- 🌐 Custom HTTP request headers and request bodies
-- 💌 Silly Tavern character card import
+### 🤖 Agent runtime
+
+- Tool-calling agent loop with hooks, wall-time / token budgets, and per-step context fit
+- **Subagents** — dispatch specialized assistants, including detached **background** runs
+- Scheduled & looping turns — recurring schedules plus in-session goal / loop commands
+- Durable async work that survives process death (e.g. background-shell completions replayed at cold start)
+- Per-assistant memory and optional **RAG** over a knowledge base, with history auto-compaction
+- Fully customizable assistants: system prompts, params, tools, message transformers, prompt
+  injections (mode / lorebook), regex, and event hooks
+
+### 🛠️ Tools & integrations
+
+- **MCP** (Model Context Protocol) client support
+- Sandboxed **workspace**: file tools + background shell execution, with a write-capable file browser
+- On-device **UI automation** (observe / tap / type), package-scoped with a kill switch
+- Built-in tools: web search, web fetch, and image generation / editing
+- **A2A** (agent-to-agent) server with LAN / mDNS discovery for delegating to the on-device agent
+- **Skills** — bundled built-ins plus user-authored skills
+- SillyTavern character-card import
+
+### 🔄 Providers
+
+- Any OpenAI-, Google-, or Anthropic-compatible endpoint — custom base URL / key / models
+- Managed sign-in modes and Azure-style deployments
+- Search backends: Exa, Tavily, Zhipu, LinkUp, Brave, Perplexity, SearXNG, and more
+- QR-code export / import for provider configs
+
+### 🎨 Chat & UX
+
+- Material You design with dark mode
+- Multimodal input (image, text, PDF, DOCX)
+- Markdown rendering with code highlighting, LaTeX, tables, and Mermaid
+- Message branching, AI translation, prompt variables
+- Custom HTTP request headers and bodies
+- Embedded web server for multi-platform access
+
+> [!NOTE]
+> The full shell / terminal and write-capable workspace surface ships in the **sideload** build;
+> the **play** build restricts it. The flavor is a security boundary, not just store metadata.
 
 ## 🔨 Building
 
