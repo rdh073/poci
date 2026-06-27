@@ -11,6 +11,7 @@ fun computeAIIconByName(name: String): String? {
         PATTERN_OPENAI.containsMatchIn(lowerName) -> "openai.svg"
         PATTERN_GEMINI.containsMatchIn(lowerName) -> "gemini-color.svg"
         PATTERN_GOOGLE.containsMatchIn(lowerName) -> "google-color.svg"
+        PATTERN_ANTIGRAVITY.containsMatchIn(lowerName) -> "antigravity-color.svg"
         PATTERN_CLAUDE.containsMatchIn(lowerName) -> "claude-color.svg"
         PATTERN_ANTHROPIC.containsMatchIn(lowerName) -> "anthropic.svg"
         PATTERN_DEEPSEEK.containsMatchIn(lowerName) -> "deepseek-color.svg"
@@ -51,6 +52,25 @@ fun computeAIIconByName(name: String): String? {
         PATTERN_MIMO.containsMatchIn(lowerName) -> "xiaomimimo.svg"
         PATTERN_LONGCAT.containsMatchIn(lowerName) -> "longcat-color.svg"
         PATTERN_RIKKAHUB.containsMatchIn(lowerName) -> "rikkahub.svg"
+        PATTERN_TOGETHER.containsMatchIn(lowerName) -> "together-color.svg"
+        PATTERN_FIREWORKS.containsMatchIn(lowerName) -> "fireworks-color.svg"
+        PATTERN_HUGGINGFACE.containsMatchIn(lowerName) -> "huggingface-color.svg"
+        PATTERN_BEDROCK.containsMatchIn(lowerName) -> "bedrock-color.svg"
+        PATTERN_AZURE.containsMatchIn(lowerName) -> "azure-color.svg"
+        PATTERN_NOVITA.containsMatchIn(lowerName) -> "novita-color.svg"
+        PATTERN_DEEPINFRA.containsMatchIn(lowerName) -> "deepinfra-color.svg"
+        PATTERN_MODELSCOPE.containsMatchIn(lowerName) -> "modelscope-color.svg"
+        PATTERN_NEBIUS.containsMatchIn(lowerName) -> "nebius.svg"
+        PATTERN_BASETEN.containsMatchIn(lowerName) -> "baseten.svg"
+        PATTERN_POE.containsMatchIn(lowerName) -> "poe-color.svg"
+        PATTERN_LMSTUDIO.containsMatchIn(lowerName) -> "lmstudio.svg"
+        PATTERN_UPSTAGE.containsMatchIn(lowerName) -> "upstage-color.svg"
+        PATTERN_VENICE.containsMatchIn(lowerName) -> "venice-color.svg"
+        PATTERN_FRIENDLI.containsMatchIn(lowerName) -> "friendli.svg"
+        PATTERN_SNOWFLAKE.containsMatchIn(lowerName) -> "snowflake-color.svg"
+        PATTERN_INCEPTION.containsMatchIn(lowerName) -> "inception.svg"
+        PATTERN_V0.containsMatchIn(lowerName) -> "v0.svg"
+        PATTERN_CODEX.containsMatchIn(lowerName) -> "codex-color.svg"
         PATTERN_SEARCH_LINKUP.containsMatchIn(lowerName) -> "linkup.png"
         PATTERN_SEARCH_BING.containsMatchIn(lowerName) -> "bing.png"
         PATTERN_SEARCH_TAVILY.containsMatchIn(lowerName) -> "tavily.png"
@@ -71,6 +91,7 @@ private val PATTERN_RIKKAHUB = Regex("rikka|auto")
 private val PATTERN_OPENAI = Regex("(gpt|openai|o\\d)")
 private val PATTERN_GEMINI = Regex("(gemini|nano-banana)")
 private val PATTERN_GOOGLE = Regex("google")
+private val PATTERN_ANTIGRAVITY = Regex("antigravity")
 private val PATTERN_ANTHROPIC = Regex("anthropic")
 private val PATTERN_CLAUDE = Regex("claude")
 private val PATTERN_DEEPSEEK = Regex("deepseek")
@@ -78,14 +99,14 @@ private val PATTERN_GROK = Regex("grok")
 private val PATTERN_QWEN = Regex("qwen|qwq|qvq")
 private val PATTERN_DOUBAO = Regex("doubao")
 private val PATTERN_OPENROUTER = Regex("openrouter")
-private val PATTERN_ZHIPU = Regex("zhipu|智谱|glm")
+private val PATTERN_ZHIPU = Regex("zhipu|z\\.ai|\\bzai\\b|智谱|glm")
 private val PATTERN_MISTRAL = Regex("mistral")
 private val PATTERN_META = Regex("meta\\b|(?<!o)llama")
 private val PATTERN_HUNYUAN = Regex("hunyuan|tencent")
 private val PATTERN_GEMMA = Regex("gemma")
 private val PATTERN_PERPLEXITY = Regex("perplexity")
 private val PATTERN_BYTEDANCE = Regex("bytedance|火山")
-private val PATTERN_ALIYUN = Regex("aliyun|阿里云|百炼")
+private val PATTERN_ALIYUN = Regex("aliyun|alibaba|阿里云|百炼")
 private val PATTERN_SILLICON_CLOUD = Regex("silicon|硅基")
 private val PATTERN_AIHUBMIX = Regex("aihubmix")
 private val PATTERN_OLLAMA = Regex("ollama")
@@ -110,6 +131,25 @@ private val PATTERN_TOKENPONY = Regex("tokenpony|小马算力")
 private val PATTERN_LING = Regex("ling|ring|百灵")
 private val PATTERN_MIMO = Regex("mimo|xiaomi|小米")
 private val PATTERN_LONGCAT = Regex("longcat")
+private val PATTERN_TOGETHER = Regex("together")
+private val PATTERN_FIREWORKS = Regex("fireworks")
+private val PATTERN_HUGGINGFACE = Regex("hugging")
+private val PATTERN_BEDROCK = Regex("bedrock")
+private val PATTERN_AZURE = Regex("azure")
+private val PATTERN_NOVITA = Regex("novita")
+private val PATTERN_DEEPINFRA = Regex("deep ?infra")
+private val PATTERN_MODELSCOPE = Regex("modelscope")
+private val PATTERN_NEBIUS = Regex("nebius")
+private val PATTERN_BASETEN = Regex("baseten")
+private val PATTERN_POE = Regex("\\bpoe\\b")
+private val PATTERN_LMSTUDIO = Regex("lm ?studio")
+private val PATTERN_UPSTAGE = Regex("upstage")
+private val PATTERN_VENICE = Regex("venice")
+private val PATTERN_FRIENDLI = Regex("friendli")
+private val PATTERN_SNOWFLAKE = Regex("snowflake")
+private val PATTERN_INCEPTION = Regex("inception")
+private val PATTERN_V0 = Regex("\\bv0\\b")
+private val PATTERN_CODEX = Regex("codex")
 
 private val PATTERN_SEARCH_LINKUP = Regex("linkup")
 private val PATTERN_SEARCH_BING = Regex("bing")
