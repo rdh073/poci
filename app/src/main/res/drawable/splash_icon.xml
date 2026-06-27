@@ -1,9 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Splash icon: the Poci robot as a single alpha-shaped glyph, tinted per theme. The tint
-     (@color/splash_icon_tint) resolves light/dark via values / values-night, so the robot is dark on the
-     light splash and light on the dark splash — following the device theme with one asset. -->
+<!-- Splash icon: the full-colour Poci teapot mascot, centered on the theme-following splash background.
+     It is multi-colour (navy body / amber lid / cream face), so it is NOT tinted — the splash background
+     (@color/splash_background) still adapts light/dark via values / values-night. -->
 <bitmap xmlns:android="http://schemas.android.com/apk/res/android"
     android:src="@drawable/splash_robot"
-    android:gravity="center"
-    android:tint="@color/splash_icon_tint"
-    android:tintMode="src_in" />
+    android:gravity="center" />
